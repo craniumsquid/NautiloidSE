@@ -1,0 +1,9 @@
+/target/
+/dist/
+.DS_Store
+*.bak
+__pycache__/
+
+# Local game saves are private test fixtures and are never committed.
+/saveExample/
+*.lsv
