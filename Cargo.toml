@@ -1,0 +1,30 @@
+[package]
+name = "nautiloid-save-editor"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "GPL-3.0-only"
+description = "Save editor for Baldur's Gate 3 (Patch 8)"
+readme = "README.md"
+
+[dependencies]
+anyhow = "1"
+# LZ4 block and frame: the sections inside .lsf files and the package file list.
+lz4_flex = "0.11"
+# Zstandard: how Patch 8 stores each file in the .lsv package.
+zstd = "0.13"
+# zlib: how saves from before Patch 8 store each file (read only).
+flate2 = "1"
+md-5 = "0.10"
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+strip = true
+
+# The format code is slow without optimizations; this keeps debug builds and tests quick.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
