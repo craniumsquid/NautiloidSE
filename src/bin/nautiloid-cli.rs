@@ -34,9 +34,10 @@ A <save> is a .lsv file or the save folder that holds one.
       The tables in a document's entity data (its NewAge blob).
   rows <save> <file.lsf> <table> [--limit N]
       A table's rows as 32-bit numbers, with the entity each belongs to.
-  set-xp <save> <out.lsv> <amount>
-      Write a copy in which every party member's experience is <amount>. For testing that
-      the game accepts an edit to the entity data.
+  poke <save> <folder> <name> [--file FILE] [--header-value HEX] [--set OFFSET=HEX,...]
+      Write a copy of the save as a new save called <name> under <folder>, with raw changes
+      to one document's entity data: its header value, or bytes at offsets in the blob (as
+      the tables and rows commands print them). For testing what the game checks.
   check <save>...
       Read each save, write it back in memory and compare.
   extract <save> <file> <out>
@@ -134,7 +135,10 @@ fn run(raw: &[String]) -> Result<()> {
         "party" => party(&Args::parse(rest, &[], &[])?, out),
         "tables" => tables(&Args::parse(rest, &[], &[])?, out),
         "rows" => rows(&Args::parse(rest, &[], &["limit"])?, out),
-        "set-xp" => set_xp(&Args::parse(rest, &[], &[])?, out),
+        "poke" => poke(
+            &Args::parse(rest, &[], &["file", "header-value", "set"])?,
+            out,
+        ),
         "check" => check(&Args::parse(rest, &[], &[])?, out),
         "extract" => extract(&Args::parse(rest, &[], &[])?),
         "rewrite" => rewrite(&Args::parse(rest, &["reencode"], &[])?, out),
@@ -549,6 +553,16 @@ fn tables(args: &Args, out: &mut impl Write) -> Result<()> {
         entities.entity_count(),
         entities.tables().len()
     )?;
+    let (data, directory) = (entities.data_range(), entities.directory_range());
+    writeln!(
+        out,
+        "header value {:016x}; data at {}..{}, directory at {}..{}",
+        entities.header_value(),
+        data.start,
+        data.end,
+        directory.start,
+        directory.end
+    )?;
     writeln!(out, "{:>8} {:>7}  {:<9} name", "rows", "row len", "kind")?;
     for table in entities.tables() {
         writeln!(
@@ -602,7 +616,8 @@ fn rows(args: &Args, out: &mut impl Write) -> Result<()> {
             .unwrap_or_default();
         writeln!(
             out,
-            "{row:>6}  {owner}  {}",
+            "{row:>6}  @{:<9} {owner}  {}",
+            entities.row_offset(id, row),
             row_text(entities.row(id, row))
         )?;
     }
@@ -688,50 +703,85 @@ fn compare_entities(a: &NewAge, b: &NewAge, limit: usize, out: &mut impl Write) 
     Ok(())
 }
 
-fn set_xp(args: &Args, out: &mut impl Write) -> Result<()> {
-    args.expect(3, "set-xp <save> <out.lsv> <amount>")?;
+fn parse_number(text: &str) -> Result<usize> {
+    match text.strip_prefix("0x") {
+        Some(digits) => usize::from_str_radix(digits, 16),
+        None => text.parse(),
+    }
+    .with_context(|| format!("{text} is not a number"))
+}
+
+fn parse_hex(text: &str) -> Result<Vec<u8>> {
+    ensure!(
+        text.len().is_multiple_of(2),
+        "{text} is not whole bytes of hex"
+    );
+    (0..text.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(text.get(i..i + 2).unwrap_or("?"), 16)
+                .with_context(|| format!("{text} is not hex"))
+        })
+        .collect()
+}
+
+fn poke(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(
+        3,
+        "poke <save> <folder> <name> [--file FILE] [--header-value HEX] [--set OFFSET=HEX,...]",
+    )?;
     let save = Save::open(Path::new(&args.positional[0]))?;
-    let target = Path::new(&args.positional[1]);
-    let amount: u32 = args.positional[2].parse().context("amount")?;
-    ensure!(!target.exists(), "{} already exists", target.display());
     if let Support::ReadOnly(why) = save.support() {
         bail!("{why}");
     }
-    let mut globals = save.lsf(save::GLOBALS)?;
-    let mut entities = NewAge::from_lsf(&globals)?;
-    for c in save::party(&globals, &entities)? {
-        let index = entities
-            .entity_index(c.entity)
-            .ok_or_else(|| anyhow!("party member {} is not in the entity table", c.entity))?;
-        for offset in save::fields::EXPERIENCE_TOTAL {
-            entities.set_u32(save::fields::EXPERIENCE, index, offset, amount)?;
-        }
-        writeln!(out, "{}: experience {} -> {amount}", c.entity, c.experience)?;
+    let file = args.get("file").unwrap_or(save::GLOBALS);
+    let mut document = save.lsf(file)?;
+    let before = NewAge::from_lsf(&document)?;
+    let mut entities = before.clone();
+    if let Some(value) = args.get("header-value") {
+        let value =
+            u64::from_str_radix(value, 16).with_context(|| format!("--header-value {value}"))?;
+        entities.set_header_value(value);
     }
-    entities.store(&mut globals)?;
+    for change in args.get("set").into_iter().flat_map(|list| list.split(',')) {
+        let (offset, bytes) = change
+            .split_once('=')
+            .ok_or_else(|| anyhow!("--set takes OFFSET=HEX, not {change}"))?;
+        entities.poke(parse_number(offset)?, &parse_hex(bytes)?)?;
+    }
+    entities.store(&mut document)?;
     let mut package = save.package.clone();
-    package.replace(save::GLOBALS, &globals.write()?)?;
-    let bytes = package.write()?;
+    package.replace(file, &document.write()?)?;
+    let folder = save::export_copy(
+        &save,
+        &package,
+        Path::new(&args.positional[1]),
+        &args.positional[2],
+    )?;
 
-    // Read the result back: the edit is there and nothing else in the entity data moved.
-    let written = nautiloid_save_editor::lspk::Package::read(bytes.clone())?;
-    ensure!(written.compute_md5()? == written.stored_md5(), "checksum");
-    let globals_after = Lsf::parse(&written.read_file(save::GLOBALS)?)?;
-    let entities_after = NewAge::from_lsf(&globals_after)?;
-    for c in save::party(&globals_after, &entities_after)? {
-        ensure!(c.experience == amount, "the edit did not survive the write");
-    }
+    // Report what differs from the original, read back from what was written.
+    let written = Save::open(&folder)?;
+    let after = NewAge::from_lsf(&written.lsf(file)?)?;
+    let changed: Vec<usize> = (0..before.bytes().len())
+        .filter(|&i| before.bytes()[i] != after.bytes()[i])
+        .collect();
+    writeln!(out, "wrote {}", folder.display())?;
+    writeln!(
+        out,
+        "  {file}: {} bytes of entity data differ, at {:?}",
+        changed.len(),
+        changed
+    )?;
     for entry in save.package.entries() {
-        if entry.name() != save::GLOBALS {
+        if entry.name() != file {
             ensure!(
-                save.package.unpack(entry)? == written.read_file(entry.name())?,
+                save.package.unpack(entry)? == written.package.read_file(entry.name())?,
                 "{}: contents changed",
                 entry.name()
             );
         }
     }
-    std::fs::write(target, &bytes).with_context(|| target.display().to_string())?;
-    writeln!(out, "wrote {}", target.display())?;
+    writeln!(out, "  every other file is identical")?;
     Ok(())
 }
 

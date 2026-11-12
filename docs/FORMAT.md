@@ -14,6 +14,9 @@ A save is a folder holding `<SaveName>.lsv` and `<SaveName>.WebP`.
   `Nelthryiis-3912126141017__Shattered Sanctum - 8h 02m`.
 - The Honour Mode save's folder is `<GameSessionID>__HonourMode`, where the first part is the
   `GameSessionID` from `meta.lsf`.
+- The game's load menu lists a save under its folder's name, the part after `__`. A copy of a
+  save folder renamed with ` - Copy` at the end appears as a second save under that name, with
+  the files inside still named after the original.
 
 ## The package (`.lsv`)
 
@@ -133,17 +136,32 @@ Tables that look like the remaining Phase 2 targets, not yet decoded:
   have to agree with.
 - `game.party.v0.MemberComponent`, `game.camp.v1.ChestComponent`, `game.v0.PlayerComponent`.
 
+## Tried in the game
+
+All on build `4.1.1.7631656`, with copies of one manual save.
+
+| Change | Result |
+| --- | --- |
+| None, but every document parsed, written and compressed again by this code | Loads |
+| Every party member's experience set to 6000 in the entity data (16 bytes changed), nothing else | Fails to load; the game returns to the main menu |
+
+So the game accepts this code's LZ4 and Zstandard output and its package layout, and something
+detects a change to the entity data.
+
 ## Not yet known
 
-- **Whether the game accepts an edit to the entity data.** The `LSMF` header has an 8-byte
-  value at offset 8 that differs in every buffer and is identical where the buffer is
-  identical. It is not xxHash64, XXH3, FNV-1, FNV-1a, MurmurHash3, CityHash64 or the start of
-  an MD5 or SHA-1 of the data, the directory or both. If it is a checksum, a changed buffer
-  will be refused until the function is found. This needs a test in the game.
-- **Whether the game accepts this editor's compression.** A re-encoded save holds identical
-  contents but different compressed bytes. This needs a test in the game.
+- **What detects a change to the entity data.** The suspect is the 8-byte value at offset 8 of
+  the `LSMF` header. It differs in every buffer, is identical where the buffer is identical,
+  is not stored anywhere else in the save, and is not a function of the table list or row
+  counts: nine buffers with the same tables and row counts have seven different values. If it is a
+  checksum, the function is not one of these, over the data section, the directory, both, the
+  whole buffer with the value zeroed or removed, or seventeen other ranges: xxHash32/64, XXH3
+  (64 and 128), MurmurHash2 64A, MurmurHash3, CityHash (32, 64, 128), FarmHash, MetroHash,
+  SpookyHash, rapidhash, SipHash-2-4 and 1-3, FNV-1 and FNV-1a, seven CRC-64 and seven CRC-32
+  variants including CRC-32C, Adler-32, plain sums and XORs of 8- to 64-bit words, or the
+  start of an MD5, SHA-1, SHA-2, SHA-3, BLAKE2 or BLAKE3 digest.
 - Whether the game checks the package's MD5 or the per-mod MD5s on load.
-- How the game discovers a save folder, and whether an exported copy needs a new name inside
-  `meta.lsf` or a new `SaveGameID` to appear beside the original.
+- Whether a save in a renamed folder loads as well as lists, and whether it should get its own
+  name inside `meta.lsf` and `SaveInfo.json`.
 - What level, experience and `SaveInfo.json` have to agree on for the game to be content.
 - The layout of tables on Patch 4 and 5. The buffer parses, but those saves stay read-only.

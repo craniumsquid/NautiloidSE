@@ -5,7 +5,7 @@ use crate::lsf::{Header, Lsf, Sections};
 use crate::lspk::Package;
 use crate::newage::NewAge;
 use crate::value::Uuid;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use serde_json::Value as Json;
 use std::path::{Path, PathBuf};
 
@@ -212,6 +212,57 @@ impl Save {
     }
 }
 
+/// Writes `package` as a new save called `name`, in a new folder under `parent`.
+///
+/// The game lists a save under its folder's name, the part after `__`: a copy of a save
+/// folder with ` - Copy` added to its name shows up in the load menu under that name, with
+/// the files inside still named after the original. So the new folder keeps the source's
+/// prefix and file names, and only the part after `__` changes. Nothing is overwritten.
+pub fn export_copy(source: &Save, package: &Package, parent: &Path, name: &str) -> Result<PathBuf> {
+    ensure!(
+        !name.trim().is_empty() && !name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']),
+        "{name:?} can't be used as a save name"
+    );
+    let source_folder = source.path.parent().unwrap_or(Path::new("."));
+    let prefix = source_folder
+        .file_name()
+        .and_then(|f| f.to_str())
+        .and_then(|f| f.split_once("__"))
+        .map_or("Nautiloid", |(prefix, _)| prefix);
+    let file_name = source
+        .path
+        .file_name()
+        .ok_or_else(|| anyhow!("{} has no file name", source.path.display()))?;
+    let folder = parent.join(format!("{prefix}__{name}"));
+    ensure!(!folder.exists(), "{} already exists", folder.display());
+
+    let bytes = package.write()?;
+    // Read the result back before anything is created.
+    let written = Package::read(bytes.clone())?;
+    ensure!(
+        written.compute_md5()? == written.stored_md5(),
+        "the written package fails its own checksum"
+    );
+    std::fs::create_dir_all(&folder).with_context(|| folder.display().to_string())?;
+    std::fs::write(folder.join(file_name), &bytes).with_context(|| folder.display().to_string())?;
+    // The screenshot beside the .lsv is what the load menu shows.
+    if let Ok(entries) = std::fs::read_dir(source_folder) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("webp"))
+            {
+                if let Some(image_name) = path.file_name() {
+                    std::fs::copy(&path, folder.join(image_name))
+                        .with_context(|| path.display().to_string())?;
+                }
+            }
+        }
+    }
+    Ok(folder)
+}
+
 /// The mods a save was made with, from `meta.lsf`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModEntry {
@@ -339,5 +390,37 @@ mod tests {
         let custom = SaveInfo::parse(br#"{"Game Version":"4.1.1.7631656"}"#).unwrap();
         assert!(custom.difficulty.is_empty() && !custom.is_honour_mode());
         assert!(SaveInfo::parse(b"not json").is_err());
+    }
+
+    #[test]
+    fn exports_a_copy_as_a_new_folder() {
+        let root = std::env::temp_dir().join(format!("nautiloid-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let source_folder = root.join("Tav-123__QuickSave_1");
+        std::fs::create_dir_all(&source_folder).unwrap();
+        let bytes = crate::lspk::build(&[("meta.lsf", b"one".as_slice())]).unwrap();
+        std::fs::write(source_folder.join("QuickSave_1.lsv"), &bytes).unwrap();
+        std::fs::write(source_folder.join("QuickSave_1.WebP"), b"image").unwrap();
+
+        let save = Save::open(&source_folder).unwrap();
+        let folder = export_copy(&save, &save.package, &root, "Edited").unwrap();
+        assert_eq!(folder, root.join("Tav-123__Edited"));
+        assert_eq!(
+            std::fs::read(folder.join("QuickSave_1.lsv")).unwrap(),
+            bytes
+        );
+        assert_eq!(
+            std::fs::read(folder.join("QuickSave_1.WebP")).unwrap(),
+            b"image"
+        );
+        // The original is untouched, and a second export of the same name is refused.
+        assert_eq!(
+            std::fs::read(source_folder.join("QuickSave_1.lsv")).unwrap(),
+            bytes
+        );
+        assert!(export_copy(&save, &save.package, &root, "Edited").is_err());
+        assert!(export_copy(&save, &save.package, &root, "a/b").is_err());
+        assert!(export_copy(&save, &save.package, &root, " ").is_err());
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -278,6 +278,45 @@ impl NewAge {
         &self.bytes
     }
 
+    /// The 8-byte value at offset 8 of the header. It differs in every blob.
+    pub fn header_value(&self) -> u64 {
+        u64_at(&self.bytes, 8)
+    }
+
+    pub fn set_header_value(&mut self, value: u64) {
+        self.bytes[8..16].copy_from_slice(&value.to_le_bytes());
+    }
+
+    /// Where the data section is in the blob.
+    pub fn data_range(&self) -> std::ops::Range<usize> {
+        HEADER_LEN..HEADER_LEN + u64_at(&self.bytes, 16) as usize
+    }
+
+    /// Where the directory (names, then table records) is in the blob.
+    pub fn directory_range(&self) -> std::ops::Range<usize> {
+        self.data_range().end..self.bytes.len()
+    }
+
+    /// Where `row` of `table` starts in the blob.
+    pub fn row_offset(&self, table: TableId, row: usize) -> usize {
+        let t = &self.tables[table];
+        assert!(row < t.rows, "{} has {} rows", t.name, t.rows);
+        t.start + row * t.row_len
+    }
+
+    /// Overwrites bytes anywhere in the blob, with no regard for what they are. For
+    /// experiments on what the game checks; edits go through the typed setters.
+    pub fn poke(&mut self, offset: usize, bytes: &[u8]) -> Result<()> {
+        ensure!(
+            offset
+                .checked_add(bytes.len())
+                .is_some_and(|end| end <= self.bytes.len()),
+            "offset {offset} is outside the entity data"
+        );
+        self.bytes[offset..offset + bytes.len()].copy_from_slice(bytes);
+        Ok(())
+    }
+
     pub fn tables(&self) -> &[Table] {
         &self.tables
     }
@@ -540,6 +579,22 @@ mod tests {
         assert!(changed[1] - changed[0] == 1);
         // The edited blob is still well formed.
         NewAge::parse(blob.bytes().to_vec()).unwrap();
+
+        // Raw access reaches the same bytes.
+        let table = blob.table(EXPERIENCE).unwrap();
+        let offset = blob.row_offset(table, blob.row_of(table, 1).unwrap());
+        assert_eq!(blob.bytes()[offset..offset + 4], 9000u32.to_le_bytes());
+        blob.poke(offset, &1u32.to_le_bytes()).unwrap();
+        assert_eq!(blob.get_u32(EXPERIENCE, 1, 0).unwrap(), 1);
+        assert!(blob.poke(blob.bytes().len() - 1, &[0, 0]).is_err());
+        assert_eq!(blob.header_value(), 0);
+        blob.set_header_value(0x1122_3344_5566_7788);
+        assert_eq!(
+            blob.bytes()[8..16],
+            [0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11]
+        );
+        assert_eq!(blob.data_range().start, 48);
+        assert_eq!(blob.directory_range().end, blob.bytes().len());
 
         assert!(
             blob.set_u32(EXPERIENCE, 0, 0, 1).is_err(),
