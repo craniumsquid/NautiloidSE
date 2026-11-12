@@ -87,7 +87,8 @@ Tried in the game so far:
   detects the change, most likely a checksum in the data's header. **Phase 2 is blocked until
   that check is understood**; tests to pin it down are in progress.
 - The load menu lists a save under its folder's name, so an export can be a new folder beside
-  the original, as planned.
+  the original, as planned. The files inside have to be named after it, or the copy hangs on
+  loading.
 
 What was found changes two earlier assumptions:
 

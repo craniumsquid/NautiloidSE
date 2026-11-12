@@ -214,13 +214,22 @@ impl Save {
 
 /// Writes `package` as a new save called `name`, in a new folder under `parent`.
 ///
-/// The game lists a save under its folder's name, the part after `__`: a copy of a save
-/// folder with ` - Copy` added to its name shows up in the load menu under that name, with
-/// the files inside still named after the original. So the new folder keeps the source's
-/// prefix and file names, and only the part after `__` changes. Nothing is overwritten.
+/// What the game needs, found by trying it:
+///
+/// * The load menu lists a save under its folder's name, the part after `__`.
+/// * The `.lsv` and the screenshot inside must carry that same name. With the files still
+///   named after another save, the entry shows no screenshot and loading hangs at 0%.
+/// * The names inside the package (the screenshot entry, `Save Name` in `SaveInfo.json`) can
+///   stay as they were.
+///
+/// So the new folder is `<prefix>__<name>`, with the source's prefix, holding `<name>.lsv` and
+/// the source's screenshot as `<name>.WebP`. Nothing is overwritten.
 pub fn export_copy(source: &Save, package: &Package, parent: &Path, name: &str) -> Result<PathBuf> {
     ensure!(
-        !name.trim().is_empty() && !name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']),
+        !name.is_empty()
+            && name == name.trim()
+            && !name.ends_with('.')
+            && !name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']),
         "{name:?} can't be used as a save name"
     );
     let source_folder = source.path.parent().unwrap_or(Path::new("."));
@@ -229,12 +238,28 @@ pub fn export_copy(source: &Save, package: &Package, parent: &Path, name: &str) 
         .and_then(|f| f.to_str())
         .and_then(|f| f.split_once("__"))
         .map_or("Nautiloid", |(prefix, _)| prefix);
-    let file_name = source
-        .path
-        .file_name()
-        .ok_or_else(|| anyhow!("{} has no file name", source.path.display()))?;
     let folder = parent.join(format!("{prefix}__{name}"));
     ensure!(!folder.exists(), "{} already exists", folder.display());
+
+    // The screenshot beside the .lsv: the one named after it, or failing that any other.
+    let mut screenshot: Option<PathBuf> = None;
+    if let Ok(entries) = std::fs::read_dir(source_folder) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("webp"))
+            {
+                let named_after_save = path.file_stem() == source.path.file_stem();
+                if named_after_save || screenshot.is_none() {
+                    screenshot = Some(path);
+                }
+                if named_after_save {
+                    break;
+                }
+            }
+        }
+    }
 
     let bytes = package.write()?;
     // Read the result back before anything is created.
@@ -244,21 +269,13 @@ pub fn export_copy(source: &Save, package: &Package, parent: &Path, name: &str) 
         "the written package fails its own checksum"
     );
     std::fs::create_dir_all(&folder).with_context(|| folder.display().to_string())?;
-    std::fs::write(folder.join(file_name), &bytes).with_context(|| folder.display().to_string())?;
-    // The screenshot beside the .lsv is what the load menu shows.
-    if let Ok(entries) = std::fs::read_dir(source_folder) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("webp"))
-            {
-                if let Some(image_name) = path.file_name() {
-                    std::fs::copy(&path, folder.join(image_name))
-                        .with_context(|| path.display().to_string())?;
-                }
-            }
-        }
+    std::fs::write(folder.join(format!("{name}.lsv")), &bytes)
+        .with_context(|| folder.display().to_string())?;
+    if let Some(path) = screenshot {
+        // Keep the extension as the game wrote it (`.WebP`).
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("WebP");
+        std::fs::copy(&path, folder.join(format!("{name}.{extension}")))
+            .with_context(|| path.display().to_string())?;
     }
     Ok(folder)
 }
@@ -402,25 +419,37 @@ mod tests {
         std::fs::write(source_folder.join("QuickSave_1.lsv"), &bytes).unwrap();
         std::fs::write(source_folder.join("QuickSave_1.WebP"), b"image").unwrap();
 
+        // A screenshot that belongs to something else must not be the one copied.
+        std::fs::write(source_folder.join("Another.webp"), b"other").unwrap();
+
         let save = Save::open(&source_folder).unwrap();
-        let folder = export_copy(&save, &save.package, &root, "Edited").unwrap();
-        assert_eq!(folder, root.join("Tav-123__Edited"));
+        let folder = export_copy(&save, &save.package, &root, "Edited - 2").unwrap();
+        assert_eq!(folder, root.join("Tav-123__Edited - 2"));
+        // The files inside are named after the new save, or the game will not load it.
+        let mut names: Vec<String> = std::fs::read_dir(&folder)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["Edited - 2.WebP", "Edited - 2.lsv"]);
+        assert_eq!(std::fs::read(folder.join("Edited - 2.lsv")).unwrap(), bytes);
         assert_eq!(
-            std::fs::read(folder.join("QuickSave_1.lsv")).unwrap(),
-            bytes
-        );
-        assert_eq!(
-            std::fs::read(folder.join("QuickSave_1.WebP")).unwrap(),
+            std::fs::read(folder.join("Edited - 2.WebP")).unwrap(),
             b"image"
         );
+        // The exported save opens like any other.
+        assert!(Save::open(&folder).is_ok());
+
         // The original is untouched, and a second export of the same name is refused.
         assert_eq!(
             std::fs::read(source_folder.join("QuickSave_1.lsv")).unwrap(),
             bytes
         );
-        assert!(export_copy(&save, &save.package, &root, "Edited").is_err());
+        assert!(export_copy(&save, &save.package, &root, "Edited - 2").is_err());
         assert!(export_copy(&save, &save.package, &root, "a/b").is_err());
         assert!(export_copy(&save, &save.package, &root, " ").is_err());
+        assert!(export_copy(&save, &save.package, &root, "Trailing ").is_err());
+        assert!(export_copy(&save, &save.package, &root, "Dot.").is_err());
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

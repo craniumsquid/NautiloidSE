@@ -14,9 +14,13 @@ A save is a folder holding `<SaveName>.lsv` and `<SaveName>.WebP`.
   `Nelthryiis-3912126141017__Shattered Sanctum - 8h 02m`.
 - The Honour Mode save's folder is `<GameSessionID>__HonourMode`, where the first part is the
   `GameSessionID` from `meta.lsf`.
-- The game's load menu lists a save under its folder's name, the part after `__`. A copy of a
-  save folder renamed with ` - Copy` at the end appears as a second save under that name, with
-  the files inside still named after the original.
+- The game's load menu lists a save under its folder's name, the part after `__`, so a copy
+  of a save folder under another name appears as a second save.
+- The `.lsv` and `.WebP` inside must be named after the folder's save name. With the files
+  still named after the original, the entry shows no screenshot and loading hangs at 0%; with
+  them renamed to match, the copy loads.
+- The names inside the package do not have to match: the copy that loads still has the
+  original's screenshot entry and `Save Name`.
 
 ## The package (`.lsv`)
 
@@ -143,6 +147,8 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | Change | Result |
 | --- | --- |
 | None, but every document parsed, written and compressed again by this code | Loads |
+| A byte-for-byte copy in a folder with another save name, files inside not renamed | Listed without its screenshot; loading hangs at 0% |
+| The same copy with the files inside renamed to match the folder | Loads |
 | Every party member's experience set to 6000 in the entity data (16 bytes changed), nothing else | Fails to load; the game returns to the main menu |
 
 So the game accepts this code's LZ4 and Zstandard output and its package layout, and something
@@ -161,7 +167,7 @@ detects a change to the entity data.
   variants including CRC-32C, Adler-32, plain sums and XORs of 8- to 64-bit words, or the
   start of an MD5, SHA-1, SHA-2, SHA-3, BLAKE2 or BLAKE3 digest.
 - Whether the game checks the package's MD5 or the per-mod MD5s on load.
-- Whether a save in a renamed folder loads as well as lists, and whether it should get its own
-  name inside `meta.lsf` and `SaveInfo.json`.
+- Whether an exported copy should also get its own name inside the package, in
+  `SaveInfo.json` and the screenshot entry. It loads without.
 - What level, experience and `SaveInfo.json` have to agree on for the game to be content.
 - The layout of tables on Patch 4 and 5. The buffer parses, but those saves stay read-only.
