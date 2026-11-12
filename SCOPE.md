@@ -26,10 +26,13 @@ authorship carries over. Nautiloid is GPL-3.0-only.
 
 ### Phase 0: format engine (no interface)
 
+Built, apart from the two checks that need the game (see Status).
+
 - Reader and writer for the save package (`.lsv`) and the Larian binary files inside it (`.lsf`).
+- Reader for the entity data inside those files, where the party's numbers are kept.
 - Round-trip test over the sample saves: read, write, compare.
-- A command-line dump tool that prints a save's contents as text, so that two saves taken before
-  and after one known change in the game can be compared to locate a field.
+- A command-line tool that lists, dumps, searches and compares saves, so that two saves taken
+  before and after one known change in the game can be compared to locate a field.
 
 ### Phase 1: browser and read-only inspector
 
@@ -66,60 +69,29 @@ authorship carries over. Nautiloid is GPL-3.0-only.
 - Forcing story outcomes or reviving story characters.
 - Console saves.
 
-## What the sample saves show
+## Status
 
-Eight saves were examined: five from the current build, one from the Patch 8 release build
-(`4.1.1.6758295`), and two from Patch 4 and Patch 5 (`4.1.1.3956130`, `4.1.1.4061076`). They
-are private and are not in this repository. The scripts that produced these findings are in
-`scripts/research/`.
+Phase 0 is built and passes on all eleven sample saves:
 
-**Save folder.** Each save is a folder named `<Leader>-<digits>__<SaveName>` that holds
-`<SaveName>.lsv` and `<SaveName>.WebP`.
+- An unchanged save writes back byte for byte.
+- Every document writes back identical sections, and all 8.3 million attribute values decode
+  and encode to the bytes they came from.
+- A save whose documents are all parsed, written and compressed again holds the same contents.
+- The party's level and experience read from the entity data match the game's own summary in
+  every Patch 8 save.
 
-**Package.** Every `.lsv` is a Larian package, version 18, in one part. The header is 40 bytes:
-magic `LSPK`, version, file list offset (8 bytes), file list size, flags, priority, a 16-byte
-MD5 and the part count. The file list is a count, a compressed size, and an LZ4 block of
-272-byte entries: a 256-byte name, a 48-bit offset, part number, flags, size on disk and
-uncompressed size.
+Two things can only be checked in the game, and Phase 2 depends on both:
 
-**Compression changed between patches.** The low four bits of an entry's flags give the method.
-The Patch 4 and 5 saves use zlib (`0x21`). Every Patch 8 save uses Zstandard (`0x23`). The
-editor writes Zstandard for Patch 8.
+1. That the game loads a save this editor compressed.
+2. That the game loads a save with a change to the entity data. The data's header has a value
+   that may be a checksum; if it is, the function has to be found first.
 
-**Contents.** A current save holds seven files or more:
+What was found changes two earlier assumptions:
 
-| File | What it is | Uncompressed size |
-| --- | --- | --- |
-| `meta.lsf` | Save metadata: game version, mod list, difficulty and custom rules, party summary | 3 to 9 KB |
-| `SaveInfo.json` | Plain JSON summary of the party: classes, level, experience, origin, race, position. Also the game version and current level | under 3 KB |
-| `Globals.lsf` | Party and global entity data | 2 to 5 MB |
-| `LevelCache/<level>.lsf` | One per visited level | up to 23 MB |
-| `StorySave.bin` | Story-script state. Out of scope; copied unchanged | 33 to 76 MB |
-| `<SaveName>.WebP` | The same screenshot that sits next to the `.lsv` | 9 to 190 KB |
+- The party's level, experience, ability scores, approval, camp supplies and inventories are
+  not in the documents' node tree. They are in a binary table store inside `Globals.lsf` (the
+  `NewAge` data). It names its tables, so it can be read, but each table's fields have to be
+  worked out one at a time.
+- Approval is in that entity data, not in the story-script state, so it stays in Phase 2.
 
-`SaveInfo.json` alone is enough for the save browser's party line. An edit to level or
-experience has to keep it in step with the entity data.
-
-**LSF files.** All are format version 7. The header is the magic `LSOF`, the version, a 64-bit
-engine version, then five pairs of uncompressed and on-disk sizes (strings, keys, nodes,
-attributes, values), a compression flag and a metadata format. In `meta.lsf` and
-`Globals.lsf` of all eight saves the keys section is empty, the strings section is a plain LZ4
-block and the other three are LZ4 frames, and the sizes account for every byte of the file.
-
-**Mods.** All eight saves are modded. The mod list is in `meta.lsf` under `ModuleSettings`,
-one `ModuleShortDesc` per mod with its folder, name, UUID and an MD5. The Patch 8 saves also
-carry `HasUnofficialMods`, `Crossplay`, `OriginalPlatform` and a `PublishHandle` per mod.
-
-**Difficulty.** `meta.lsf` holds `Difficulty`, `CustomRulesetValues`, `DisabledSingleSave` and
-`DishonorDifficultySelection`. Five of the six Patch 8 saves carry custom ruleset values.
-
-## Not yet known
-
-- Where each Phase 2 value is stored: ability scores, experience, gold and stack counts,
-  Inspiration, camp supplies and approval. Approval may be in the story-script state instead of
-  the entity data; if so it moves out of Phase 2.
-- Whether the game checks the MD5 in the package header or the per-mod MD5s on load.
-- How the game names and discovers a new save folder, and whether an exported copy needs a new
-  save ID to appear beside the original.
-- Whether Zstandard output from a different encoder, with different compressed bytes but the
-  same contents, loads without complaint. This needs one test in the game.
+The details are in [docs/FORMAT.md](docs/FORMAT.md).

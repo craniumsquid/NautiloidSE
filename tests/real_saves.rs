@@ -6,6 +6,8 @@
 
 use nautiloid_save_editor::lsf::{Lsf, Sections};
 use nautiloid_save_editor::lspk::{Method, Package};
+use nautiloid_save_editor::newage::NewAge;
+use nautiloid_save_editor::save::{self, Save, Support};
 use nautiloid_save_editor::value;
 use std::path::PathBuf;
 
@@ -152,5 +154,59 @@ fn re_encoded_saves_hold_the_same_contents() {
             "{}",
             path.display()
         );
+    }
+}
+
+#[test]
+fn entity_data_parses_and_matches_the_summary() {
+    for path in saves() {
+        let save = Save::open(&path).unwrap();
+        let mut blobs = 0;
+        for name in save.lsf_names() {
+            let lsf = save.lsf(name).unwrap();
+            if NewAge::attribute(&lsf).is_none() {
+                continue;
+            }
+            let label = format!("{} / {name}", path.display());
+            let blob = NewAge::from_lsf(&lsf).unwrap_or_else(|e| panic!("{label}: {e:#}"));
+            assert!(
+                blob.tables().len() > 50,
+                "{label}: only {} tables",
+                blob.tables().len()
+            );
+            // Storing an unchanged blob leaves the document as it was.
+            let mut copy = lsf.clone();
+            blob.store(&mut copy).unwrap();
+            assert!(
+                copy.to_sections().unwrap() == lsf.to_sections().unwrap(),
+                "{label}"
+            );
+            blobs += 1;
+        }
+        assert!(blobs >= 2, "{}: {blobs} blobs", path.display());
+
+        // The party's level and experience in the entity data are the ones the game wrote
+        // in its own summary. Older saves lay the tables out differently and are read-only.
+        if save.support() != Support::Editable {
+            continue;
+        }
+        let globals = save.lsf(save::GLOBALS).unwrap();
+        let entities = NewAge::from_lsf(&globals).unwrap();
+        let mut found: Vec<(u32, u64)> = save::party(&globals, &entities)
+            .unwrap_or_else(|e| panic!("{}: {e:#}", path.display()))
+            .iter()
+            .map(|c| (c.level, c.experience as u64))
+            .collect();
+        let mut expected: Vec<(u32, u64)> = save
+            .info()
+            .unwrap()
+            .party
+            .iter()
+            .filter(|m| !m.classes.is_empty())
+            .map(|m| (m.level, m.experience_total))
+            .collect();
+        found.sort();
+        expected.sort();
+        assert_eq!(found, expected, "{}", path.display());
     }
 }

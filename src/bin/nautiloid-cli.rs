@@ -5,6 +5,7 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use nautiloid_save_editor::diff;
 use nautiloid_save_editor::lsf::{Lsf, NodeId, Sections};
 use nautiloid_save_editor::lspk::Method;
+use nautiloid_save_editor::newage::NewAge;
 use nautiloid_save_editor::save::{self, Save, Support};
 use nautiloid_save_editor::value;
 use std::collections::BTreeMap;
@@ -27,6 +28,15 @@ A <save> is a .lsv file or the save folder that holds one.
       is NAME, or that sit on a node called NODE. At least one of the three.
   diff <save> <save> [--file FILE] [--grep TEXT] [--limit N] [--summary]
       What differs between two saves, document by document.
+  party <save>
+      The party as the entity data has it: level, experience and ability scores.
+  tables <save> <file.lsf>
+      The tables in a document's entity data (its NewAge blob).
+  rows <save> <file.lsf> <table> [--limit N]
+      A table's rows as 32-bit numbers, with the entity each belongs to.
+  set-xp <save> <out.lsv> <amount>
+      Write a copy in which every party member's experience is <amount>. For testing that
+      the game accepts an edit to the entity data.
   check <save>...
       Read each save, write it back in memory and compare.
   extract <save> <file> <out>
@@ -121,6 +131,10 @@ fn run(raw: &[String]) -> Result<()> {
             &Args::parse(rest, &["summary"], &["file", "grep", "limit"])?,
             out,
         ),
+        "party" => party(&Args::parse(rest, &[], &[])?, out),
+        "tables" => tables(&Args::parse(rest, &[], &[])?, out),
+        "rows" => rows(&Args::parse(rest, &[], &["limit"])?, out),
+        "set-xp" => set_xp(&Args::parse(rest, &[], &[])?, out),
         "check" => check(&Args::parse(rest, &[], &[])?, out),
         "extract" => extract(&Args::parse(rest, &[], &[])?),
         "rewrite" => rewrite(&Args::parse(rest, &["reencode"], &[])?, out),
@@ -477,12 +491,247 @@ fn compare(args: &Args, out: &mut impl Write) -> Result<()> {
                 writeln!(out, "{count:>7}  {kind}")?;
             }
         }
+        if let (Ok(before), Ok(after)) = (NewAge::from_lsf(&old), NewAge::from_lsf(&new)) {
+            writeln!(out, "-- entity data in {name}")?;
+            compare_entities(&before, &after, limit, out)?;
+        }
     }
     for entry in b.package.entries() {
         if !a.package.contains(entry.name()) && args.get("file").is_none_or(|f| f == entry.name()) {
             writeln!(out, "== {}: only in the second save", entry.name())?;
         }
     }
+    Ok(())
+}
+
+fn party(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(1, "party <save>")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let globals = save.lsf(save::GLOBALS)?;
+    let entities = NewAge::from_lsf(&globals)?;
+    writeln!(
+        out,
+        "{:<36}  {:<36}  level  experience  Str Dex Con Int Wis Cha",
+        "entity", "template"
+    )?;
+    for c in save::party(&globals, &entities)? {
+        let abilities: Vec<String> = c.abilities.iter().map(|a| format!("{a:>3}")).collect();
+        writeln!(
+            out,
+            "{}  {:<36}  {:>5}  {:>10}  {}",
+            c.entity,
+            c.template,
+            c.level,
+            c.experience,
+            abilities.join(" ")
+        )?;
+    }
+    if let Some(table) = entities.table(save::fields::CAMP_SUPPLIES) {
+        if entities.tables()[table].rows == 1 {
+            let row = entities.row(table, 0);
+            writeln!(
+                out,
+                "camp supplies {}",
+                u32::from_le_bytes([row[0], row[1], row[2], row[3]])
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn tables(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(2, "tables <save> <file.lsf>")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let entities = NewAge::from_lsf(&save.lsf(&args.positional[1])?)?;
+    writeln!(
+        out,
+        "{} entities, {} tables",
+        entities.entity_count(),
+        entities.tables().len()
+    )?;
+    writeln!(out, "{:>8} {:>7}  {:<9} name", "rows", "row len", "kind")?;
+    for table in entities.tables() {
+        writeln!(
+            out,
+            "{:>8} {:>7}  {:<9} {}",
+            table.rows,
+            table.row_len,
+            if table.is_component() {
+                "component"
+            } else {
+                "data"
+            },
+            table.name
+        )?;
+    }
+    Ok(())
+}
+
+/// A row as text: 32-bit numbers, then any bytes left over.
+fn row_text(row: &[u8]) -> String {
+    let mut parts: Vec<String> = row
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]).to_string())
+        .collect();
+    let rest = row.chunks_exact(4).remainder();
+    if !rest.is_empty() {
+        parts.push(format!("0x{}", hex(rest)));
+    }
+    parts.join(" ")
+}
+
+fn rows(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(3, "rows <save> <file.lsf> <table> [--limit N]")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let entities = NewAge::from_lsf(&save.lsf(&args.positional[1])?)?;
+    let name = &args.positional[2];
+    let id = entities
+        .table(name)
+        .ok_or_else(|| anyhow!("no table called {name}; see the tables command"))?;
+    let table = &entities.tables()[id];
+    let limit = args.number("limit")?.unwrap_or(50);
+    writeln!(
+        out,
+        "{name}: {} rows of {} bytes",
+        table.rows, table.row_len
+    )?;
+    for row in 0..table.rows.min(limit) {
+        let owner = entities
+            .owner(id, row)
+            .map(|e| entities.entity_id(e).to_string())
+            .unwrap_or_default();
+        writeln!(
+            out,
+            "{row:>6}  {owner}  {}",
+            row_text(entities.row(id, row))
+        )?;
+    }
+    if table.rows > limit {
+        writeln!(
+            out,
+            "… {} more (raise --limit to see them)",
+            table.rows - limit
+        )?;
+    }
+    Ok(())
+}
+
+/// What differs between the entity data of two documents, table by table. Rows of a
+/// component table are matched by the entity that owns them, since rows move.
+fn compare_entities(a: &NewAge, b: &NewAge, limit: usize, out: &mut impl Write) -> Result<()> {
+    let mut shown = 0;
+    for (id_b, table_b) in b.tables().iter().enumerate() {
+        let Some(id_a) = a.table(&table_b.name) else {
+            writeln!(out, "   + table {} ({} rows)", table_b.name, table_b.rows)?;
+            continue;
+        };
+        let table_a = &a.tables()[id_a];
+        if table_a.row_len != table_b.row_len || !table_b.is_component() || !table_a.is_component()
+        {
+            if table_a.rows != table_b.rows {
+                writeln!(
+                    out,
+                    "   {}: {} -> {} rows",
+                    table_b.name, table_a.rows, table_b.rows
+                )?;
+            }
+            continue;
+        }
+        let mut before = std::collections::HashMap::new();
+        for row in 0..table_a.rows {
+            if let Some(owner) = a.owner(id_a, row) {
+                before.insert(a.entity_id(owner), row);
+            }
+        }
+        let (mut changed, mut added) = (0, 0);
+        let mut lines = Vec::new();
+        for row in 0..table_b.rows {
+            let Some(owner) = b.owner(id_b, row) else {
+                continue;
+            };
+            let entity = b.entity_id(owner);
+            match before.remove(&entity) {
+                None => added += 1,
+                Some(old) if a.row(id_a, old) != b.row(id_b, row) => {
+                    changed += 1;
+                    if lines.len() < 8 {
+                        lines.push(format!(
+                            "      {entity}  {}  ->  {}",
+                            row_text(a.row(id_a, old)),
+                            row_text(b.row(id_b, row))
+                        ));
+                    }
+                }
+                Some(_) => {}
+            }
+        }
+        let removed = before.len();
+        if changed + added + removed > 0 {
+            writeln!(
+                out,
+                "   {}: {changed} changed, {added} added, {removed} removed (of {} rows)",
+                table_b.name, table_b.rows
+            )?;
+            if shown < limit {
+                for line in &lines {
+                    writeln!(out, "{line}")?;
+                }
+                shown += lines.len();
+            }
+        }
+    }
+    for table in a.tables() {
+        if b.table(&table.name).is_none() {
+            writeln!(out, "   - table {} ({} rows)", table.name, table.rows)?;
+        }
+    }
+    Ok(())
+}
+
+fn set_xp(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(3, "set-xp <save> <out.lsv> <amount>")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let target = Path::new(&args.positional[1]);
+    let amount: u32 = args.positional[2].parse().context("amount")?;
+    ensure!(!target.exists(), "{} already exists", target.display());
+    if let Support::ReadOnly(why) = save.support() {
+        bail!("{why}");
+    }
+    let mut globals = save.lsf(save::GLOBALS)?;
+    let mut entities = NewAge::from_lsf(&globals)?;
+    for c in save::party(&globals, &entities)? {
+        let index = entities
+            .entity_index(c.entity)
+            .ok_or_else(|| anyhow!("party member {} is not in the entity table", c.entity))?;
+        for offset in save::fields::EXPERIENCE_TOTAL {
+            entities.set_u32(save::fields::EXPERIENCE, index, offset, amount)?;
+        }
+        writeln!(out, "{}: experience {} -> {amount}", c.entity, c.experience)?;
+    }
+    entities.store(&mut globals)?;
+    let mut package = save.package.clone();
+    package.replace(save::GLOBALS, &globals.write()?)?;
+    let bytes = package.write()?;
+
+    // Read the result back: the edit is there and nothing else in the entity data moved.
+    let written = nautiloid_save_editor::lspk::Package::read(bytes.clone())?;
+    ensure!(written.compute_md5()? == written.stored_md5(), "checksum");
+    let globals_after = Lsf::parse(&written.read_file(save::GLOBALS)?)?;
+    let entities_after = NewAge::from_lsf(&globals_after)?;
+    for c in save::party(&globals_after, &entities_after)? {
+        ensure!(c.experience == amount, "the edit did not survive the write");
+    }
+    for entry in save.package.entries() {
+        if entry.name() != save::GLOBALS {
+            ensure!(
+                save.package.unpack(entry)? == written.read_file(entry.name())?,
+                "{}: contents changed",
+                entry.name()
+            );
+        }
+    }
+    std::fs::write(target, &bytes).with_context(|| target.display().to_string())?;
+    writeln!(out, "wrote {}", target.display())?;
     Ok(())
 }
 

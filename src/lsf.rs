@@ -347,7 +347,7 @@ impl Lsf {
         };
 
         ensure!(
-            sections.nodes.len() % 12 == 0,
+            sections.nodes.len().is_multiple_of(12),
             "nodes section has a partial entry"
         );
         let node_count = sections.nodes.len() / 12;
@@ -368,7 +368,7 @@ impl Lsf {
         }
 
         ensure!(
-            sections.attributes.len() % 12 == 0,
+            sections.attributes.len().is_multiple_of(12),
             "attributes section has a partial entry"
         );
         let attr_count = sections.attributes.len() / 12;
@@ -403,7 +403,7 @@ impl Lsf {
         );
 
         ensure!(
-            sections.keys.len() % 8 == 0,
+            sections.keys.len().is_multiple_of(8),
             "keys section has a partial entry"
         );
         let mut keys = Vec::with_capacity(sections.keys.len() / 8);
