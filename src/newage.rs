@@ -10,7 +10,7 @@
 //! ```text
 //! 0   "LSMF"
 //! 4   01 01 00 08
-//! 8   u64  differs in every blob; what it is derived from is not known
+//! 8   u64  checksum of everything after the header
 //! 16  u64  size of the data section
 //! 24  u64  size of the directory (names, then table records)
 //! 32  u32  size of the names
@@ -21,9 +21,16 @@
 //! ..  the names, then one 48-byte record per table
 //! ```
 //!
-//! A table record is: name offset (u64) and length (u32), flags (u32, 0x8f), a hash that is the
-//! same for a given table in every save (u64), row length (u32), version (u32, matching the
-//! `vN` in the name), row count (u64) and offset (u64).
+//! The checksum is the first half of MurmurHash3 x64_128 over bytes 48 to the end, with both
+//! halves of the state seeded with `0xf0015eed5eedf001`. The game checks it: with one bit of
+//! the checksum or one unused byte of the data or directory changed, a save loads to 100% and
+//! then drops to the title screen with "Server shutting down". The function and seed are from
+//! the SaveForge project's notes; they reproduce the stored value of every blob in the samples.
+//!
+//! A table record is: name offset (u64) and length (u32), four unused bytes, a hash that is
+//! the same for a given table in every save (u64), row length (u32), version (u32, matching
+//! the `vN` in the name), row count (u64) and offset (u64). Unused bytes here and in the data
+//! hold whatever was in memory, and they count towards the checksum like any others.
 //!
 //! Table 0, `core.v0.Level`, has one row of four u64: where the entity list starts, where it
 //! ends, the offset of the owner map and the offset of the data that follows the map.
@@ -39,7 +46,7 @@
 //! not components; their rows are pointed at from other rows.
 //!
 //! Only edits that keep a row's size are supported: they overwrite bytes in place and leave
-//! every offset valid.
+//! every offset valid. The checksum is recomputed whenever the blob is written out.
 
 use crate::lsf::{AttrId, Lsf};
 use crate::value::Uuid;
@@ -56,6 +63,67 @@ const LEVEL_TABLE: &str = "core.v0.Level";
 const ENTITY_TABLE: &str = "core.v0.EntityId";
 /// Name of the node and of its attribute that hold the blob.
 pub const NODE: &str = "NewAge";
+/// Seed for both halves of the checksum's state.
+const CHECKSUM_SEED: u64 = 0xf001_5eed_5eed_f001;
+
+/// MurmurHash3 x64_128, with one 64-bit seed for both halves of the state. Returns `(h1, h2)`.
+/// With a seed that fits in 32 bits this is the reference function.
+fn murmur3_x64_128(data: &[u8], seed: u64) -> (u64, u64) {
+    const C1: u64 = 0x87c3_7b91_1142_53d5;
+    const C2: u64 = 0x4cf5_ad43_2745_937f;
+    fn mix1(k: u64) -> u64 {
+        k.wrapping_mul(C1).rotate_left(31).wrapping_mul(C2)
+    }
+    fn mix2(k: u64) -> u64 {
+        k.wrapping_mul(C2).rotate_left(33).wrapping_mul(C1)
+    }
+    fn finish(mut k: u64) -> u64 {
+        k ^= k >> 33;
+        k = k.wrapping_mul(0xff51_afd7_ed55_8ccd);
+        k ^= k >> 33;
+        k = k.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+        k ^ (k >> 33)
+    }
+    /// Up to eight bytes as a little-endian number.
+    fn partial(bytes: &[u8]) -> u64 {
+        let mut word = [0u8; 8];
+        word[..bytes.len()].copy_from_slice(bytes);
+        u64::from_le_bytes(word)
+    }
+
+    let (mut h1, mut h2) = (seed, seed);
+    let mut blocks = data.chunks_exact(16);
+    for block in &mut blocks {
+        h1 ^= mix1(u64_at(block, 0));
+        h1 = h1
+            .rotate_left(27)
+            .wrapping_add(h2)
+            .wrapping_mul(5)
+            .wrapping_add(0x52dc_e729);
+        h2 ^= mix2(u64_at(block, 8));
+        h2 = h2
+            .rotate_left(31)
+            .wrapping_add(h1)
+            .wrapping_mul(5)
+            .wrapping_add(0x3849_5ab5);
+    }
+    let tail = blocks.remainder();
+    if tail.len() > 8 {
+        h2 ^= mix2(partial(&tail[8..]));
+    }
+    if !tail.is_empty() {
+        h1 ^= mix1(partial(&tail[..tail.len().min(8)]));
+    }
+    h1 ^= data.len() as u64;
+    h2 ^= data.len() as u64;
+    h1 = h1.wrapping_add(h2);
+    h2 = h2.wrapping_add(h1);
+    h1 = finish(h1);
+    h2 = finish(h2);
+    h1 = h1.wrapping_add(h2);
+    h2 = h2.wrapping_add(h1);
+    (h1, h2)
+}
 
 fn u32_at(d: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([d[at], d[at + 1], d[at + 2], d[at + 3]])
@@ -76,7 +144,6 @@ pub struct Table {
     pub name: String,
     /// Identifies the table's layout; the same in every save for a given name.
     pub schema: u64,
-    pub flags: u32,
     pub version: u32,
     /// Bytes per row.
     pub row_len: usize,
@@ -97,6 +164,7 @@ impl Table {
 /// A parsed blob. It keeps the bytes it was read from; edits change them in place.
 #[derive(Clone)]
 pub struct NewAge {
+    /// The blob. After an edit the checksum in it is out of date until it is written out.
     bytes: Vec<u8>,
     tables: Vec<Table>,
     by_name: HashMap<String, TableId>,
@@ -177,7 +245,6 @@ impl NewAge {
             tables.push(Table {
                 name,
                 schema: u64_at(record, 16),
-                flags: u32_at(record, 12),
                 version: u32_at(record, 28),
                 row_len,
                 rows,
@@ -263,38 +330,33 @@ impl NewAge {
             );
         }
 
-        Ok(NewAge {
+        // The game refuses a blob whose checksum is wrong, and a mismatch here would mean
+        // this code's idea of the checksum is wrong, so nothing is built on such a blob.
+        let blob = NewAge {
             bytes,
             tables,
             by_name,
             entities,
             entity_count,
             by_entity,
-        })
+        };
+        ensure!(
+            blob.checksum() == u64_at(&blob.bytes, 8),
+            "the entity data fails its checksum"
+        );
+        Ok(blob)
     }
 
-    /// The blob, with any edits made.
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+    /// The checksum of the blob's current contents.
+    pub fn checksum(&self) -> u64 {
+        murmur3_x64_128(&self.bytes[HEADER_LEN..], CHECKSUM_SEED).0
     }
 
-    /// The 8-byte value at offset 8 of the header. It differs in every blob.
-    pub fn header_value(&self) -> u64 {
-        u64_at(&self.bytes, 8)
-    }
-
-    pub fn set_header_value(&mut self, value: u64) {
-        self.bytes[8..16].copy_from_slice(&value.to_le_bytes());
-    }
-
-    /// Where the data section is in the blob.
-    pub fn data_range(&self) -> std::ops::Range<usize> {
-        HEADER_LEN..HEADER_LEN + u64_at(&self.bytes, 16) as usize
-    }
-
-    /// Where the directory (names, then table records) is in the blob.
-    pub fn directory_range(&self) -> std::ops::Range<usize> {
-        self.data_range().end..self.bytes.len()
+    /// The blob with any edits made and its checksum brought up to date.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = self.bytes.clone();
+        out[8..16].copy_from_slice(&self.checksum().to_le_bytes());
+        out
     }
 
     /// Where `row` of `table` starts in the blob.
@@ -302,19 +364,6 @@ impl NewAge {
         let t = &self.tables[table];
         assert!(row < t.rows, "{} has {} rows", t.name, t.rows);
         t.start + row * t.row_len
-    }
-
-    /// Overwrites bytes anywhere in the blob, with no regard for what they are. For
-    /// experiments on what the game checks; edits go through the typed setters.
-    pub fn poke(&mut self, offset: usize, bytes: &[u8]) -> Result<()> {
-        ensure!(
-            offset
-                .checked_add(bytes.len())
-                .is_some_and(|end| end <= self.bytes.len()),
-            "offset {offset} is outside the entity data"
-        );
-        self.bytes[offset..offset + bytes.len()].copy_from_slice(bytes);
-        Ok(())
     }
 
     pub fn tables(&self) -> &[Table] {
@@ -390,14 +439,14 @@ impl NewAge {
         Ok(())
     }
 
-    /// Writes the blob back into the document it came from.
+    /// Writes the blob back into the document it came from, with its checksum up to date.
     pub fn store(&self, lsf: &mut Lsf) -> Result<()> {
         let attr =
             NewAge::attribute(lsf).ok_or_else(|| anyhow!("the document has no NewAge data"))?;
         if lsf.attr_bytes(attr).len() != self.bytes.len() {
             bail!("the NewAge data changed size");
         }
-        lsf.set_bytes(attr, &self.bytes)
+        lsf.set_bytes(attr, &self.to_bytes())
     }
 }
 
@@ -423,6 +472,7 @@ pub mod build {
         let mut record = |name: &str, row_len: usize, rows: usize, offset: usize| {
             records.extend_from_slice(&(names.len() as u64).to_le_bytes());
             records.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            // Unused; the game leaves whatever was in memory.
             records.extend_from_slice(&0x8fu32.to_le_bytes());
             records.extend_from_slice(&0u64.to_le_bytes());
             records.extend_from_slice(&(row_len as u32).to_le_bytes());
@@ -508,6 +558,8 @@ pub mod build {
         out.extend_from_slice(&data);
         out.extend_from_slice(&names);
         out.extend_from_slice(&records);
+        let checksum = murmur3_x64_128(&out[HEADER_LEN..], CHECKSUM_SEED).0;
+        out[8..16].copy_from_slice(&checksum.to_le_bytes());
         out
     }
 }
@@ -572,29 +624,34 @@ mod tests {
         assert_eq!(blob.get_u32(EXPERIENCE, 1, 0).unwrap(), 9000);
         assert_eq!(blob.get_u32(EXPERIENCE, 2, 0).unwrap(), 5655);
 
-        let changed: Vec<usize> = (0..original.len())
-            .filter(|&i| original[i] != blob.bytes()[i])
-            .collect();
-        assert_eq!(changed.len(), 2, "9000 differs from 5595 in two bytes");
-        assert!(changed[1] - changed[0] == 1);
-        // The edited blob is still well formed.
-        NewAge::parse(blob.bytes().to_vec()).unwrap();
-
-        // Raw access reaches the same bytes.
+        // Written out, only the edited field and the checksum differ.
+        let written = blob.to_bytes();
         let table = blob.table(EXPERIENCE).unwrap();
-        let offset = blob.row_offset(table, blob.row_of(table, 1).unwrap());
-        assert_eq!(blob.bytes()[offset..offset + 4], 9000u32.to_le_bytes());
-        blob.poke(offset, &1u32.to_le_bytes()).unwrap();
-        assert_eq!(blob.get_u32(EXPERIENCE, 1, 0).unwrap(), 1);
-        assert!(blob.poke(blob.bytes().len() - 1, &[0, 0]).is_err());
-        assert_eq!(blob.header_value(), 0);
-        blob.set_header_value(0x1122_3344_5566_7788);
-        assert_eq!(
-            blob.bytes()[8..16],
-            [0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11]
+        let field = blob.row_offset(table, blob.row_of(table, 1).unwrap());
+        let changed: Vec<usize> = (0..original.len())
+            .filter(|&i| original[i] != written[i])
+            .collect();
+        assert!(!changed.is_empty());
+        assert!(
+            changed
+                .iter()
+                .all(|&i| (8..16).contains(&i) || (field..field + 4).contains(&i)),
+            "{changed:?}"
         );
-        assert_eq!(blob.data_range().start, 48);
-        assert_eq!(blob.directory_range().end, blob.bytes().len());
+        assert_eq!(written[field..field + 4], 9000u32.to_le_bytes());
+        assert_ne!(
+            written[8..16],
+            original[8..16],
+            "the checksum follows the edit"
+        );
+        // The edited blob is well formed, checksum included, and reads back the edit.
+        let again = NewAge::parse(written).unwrap();
+        assert_eq!(again.get_u32(EXPERIENCE, 1, 0).unwrap(), 9000);
+        // An unedited blob is written out exactly as it was read.
+        assert_eq!(
+            NewAge::parse(original.clone()).unwrap().to_bytes(),
+            original
+        );
 
         assert!(
             blob.set_u32(EXPERIENCE, 0, 0, 1).is_err(),
@@ -622,5 +679,63 @@ mod tests {
         let last = too_many.len() - 16;
         too_many[last..last + 8].copy_from_slice(&u64::MAX.to_le_bytes());
         assert!(NewAge::parse(too_many).is_err());
+    }
+
+    #[test]
+    fn rejects_a_blob_that_fails_its_checksum() {
+        let bytes = sample();
+        // One bit of the checksum, one unused byte of the data, one unused byte of the
+        // directory: each is enough for the game to refuse the save.
+        let data_end = 48 + u64_at(&bytes, 16) as usize;
+        for at in [8, 48, data_end] {
+            let mut changed = bytes.clone();
+            changed[at] ^= 1;
+            let error = NewAge::parse(changed).err().unwrap().to_string();
+            assert!(error.contains("checksum"), "byte {at}: {error}");
+        }
+    }
+
+    #[test]
+    fn checksum_function_matches_the_reference() {
+        // Reference values for MurmurHash3 x64_128 with 32-bit seeds, covering an empty input
+        // and tails shorter than, equal to and longer than eight bytes.
+        let fox = b"The quick brown fox jumps over the lazy dog";
+        let counting: Vec<u8> = (0..40).collect();
+        let cases: [(&[u8], u64, (u64, u64)); 6] = [
+            (b"", 0, (0, 0)),
+            (fox, 0, (0xe34b_bc7b_bc07_1b6c, 0x7a43_3ca9_c49a_9347)),
+            (b"a", 0, (0x8555_5565_f659_7889, 0xe6b5_3a48_510e_895a)),
+            (
+                &fox[..16],
+                0,
+                (0x9d12_44f4_af9b_32c4, 0x3d15_3c8b_2c2a_3aa6),
+            ),
+            (
+                &fox[..25],
+                0x9747_b28c,
+                (0x785c_7748_7d9c_95a1, 0x0a76_9e50_9f6d_5935),
+            ),
+            (
+                &counting,
+                42,
+                (0xae8e_6b70_5c22_d1da, 0xa479_4c6f_0ee8_9ef1),
+            ),
+        ];
+        for (data, seed, expected) in cases {
+            assert_eq!(
+                murmur3_x64_128(data, seed),
+                expected,
+                "{data:?} seed {seed}"
+            );
+        }
+        // And with the 64-bit seed the game uses.
+        assert_eq!(
+            murmur3_x64_128(fox, CHECKSUM_SEED),
+            (0x9c25_2313_9d76_b285, 0x4a09_cf92_d0c7_b26a)
+        );
+        assert_eq!(
+            murmur3_x64_128(&counting, CHECKSUM_SEED),
+            (0x531b_92c2_0850_a404, 0x2357_7ed5_d1c4_2314)
+        );
     }
 }

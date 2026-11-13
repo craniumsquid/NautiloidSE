@@ -26,7 +26,7 @@ authorship carries over. Nautiloid is GPL-3.0-only.
 
 ### Phase 0: format engine (no interface)
 
-Built. One finding from the game blocks Phase 2 (see Status).
+Built. One check in the game remains before Phase 2 (see Status).
 
 - Reader and writer for the save package (`.lsv`) and the Larian binary files inside it (`.lsf`).
 - Reader for the entity data inside those files, where the party's numbers are kept.
@@ -83,9 +83,11 @@ Phase 0 is built and passes on all eleven sample saves:
 Tried in the game so far:
 
 - A save this code compressed, with nothing changed, loads.
-- A save with only the party's experience changed in the entity data does not load. Something
-  detects the change, most likely a checksum in the data's header. **Phase 2 is blocked until
-  that check is understood**; tests to pin it down are in progress.
+- A save with anything changed in the entity data does not load unless the checksum in that
+  data's header is brought up to date. The function is known and built in: it reproduces the
+  stored checksum of every sample and predicts all seven in-game results.
+- **Still to try: an edit with a correct checksum.** Phase 2 starts once one loads and shows
+  the new value.
 - The load menu lists a save under its folder's name, so an export can be a new folder beside
   the original, as planned. The files inside have to be named after it, or the copy hangs on
   loading.

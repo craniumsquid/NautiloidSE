@@ -34,10 +34,10 @@ A <save> is a .lsv file or the save folder that holds one.
       The tables in a document's entity data (its NewAge blob).
   rows <save> <file.lsf> <table> [--limit N]
       A table's rows as 32-bit numbers, with the entity each belongs to.
-  poke <save> <folder> <name> [--file FILE] [--header-value HEX] [--set OFFSET=HEX,...]
-      Write a copy of the save as a new save called <name> under <folder>, with raw changes
-      to one document's entity data: its header value, or bytes at offsets in the blob (as
-      the tables and rows commands print them). For testing what the game checks.
+  set <save> <folder> <name> --u32 TABLE:ENTITY:OFFSET=VALUE,... [--file FILE]
+      Write a copy of the save as a new save called <name> under <folder>, with 32-bit
+      fields of its entity data changed. ENTITY is the owner's identifier and OFFSET the
+      field's position in the row, as the rows command shows them.
   check <save>...
       Read each save, write it back in memory and compare.
   extract <save> <file> <out>
@@ -135,10 +135,7 @@ fn run(raw: &[String]) -> Result<()> {
         "party" => party(&Args::parse(rest, &[], &[])?, out),
         "tables" => tables(&Args::parse(rest, &[], &[])?, out),
         "rows" => rows(&Args::parse(rest, &[], &["limit"])?, out),
-        "poke" => poke(
-            &Args::parse(rest, &[], &["file", "header-value", "set"])?,
-            out,
-        ),
+        "set" => set(&Args::parse(rest, &[], &["file", "u32"])?, out),
         "check" => check(&Args::parse(rest, &[], &[])?, out),
         "extract" => extract(&Args::parse(rest, &[], &[])?),
         "rewrite" => rewrite(&Args::parse(rest, &["reencode"], &[])?, out),
@@ -553,16 +550,6 @@ fn tables(args: &Args, out: &mut impl Write) -> Result<()> {
         entities.entity_count(),
         entities.tables().len()
     )?;
-    let (data, directory) = (entities.data_range(), entities.directory_range());
-    writeln!(
-        out,
-        "header value {:016x}; data at {}..{}, directory at {}..{}",
-        entities.header_value(),
-        data.start,
-        data.end,
-        directory.start,
-        directory.end
-    )?;
     writeln!(out, "{:>8} {:>7}  {:<9} name", "rows", "row len", "kind")?;
     for table in entities.tables() {
         writeln!(
@@ -703,51 +690,61 @@ fn compare_entities(a: &NewAge, b: &NewAge, limit: usize, out: &mut impl Write) 
     Ok(())
 }
 
-fn parse_number(text: &str) -> Result<usize> {
-    match text.strip_prefix("0x") {
-        Some(digits) => usize::from_str_radix(digits, 16),
-        None => text.parse(),
-    }
-    .with_context(|| format!("{text} is not a number"))
+/// One `TABLE:ENTITY:OFFSET=VALUE` from the set command.
+struct FieldChange {
+    table: String,
+    entity: value::Uuid,
+    offset: usize,
+    value: u32,
 }
 
-fn parse_hex(text: &str) -> Result<Vec<u8>> {
-    ensure!(
-        text.len().is_multiple_of(2),
-        "{text} is not whole bytes of hex"
-    );
-    (0..text.len())
-        .step_by(2)
-        .map(|i| {
-            u8::from_str_radix(text.get(i..i + 2).unwrap_or("?"), 16)
-                .with_context(|| format!("{text} is not hex"))
-        })
-        .collect()
+fn parse_field_change(text: &str) -> Result<FieldChange> {
+    let usage = || anyhow!("--u32 takes TABLE:ENTITY:OFFSET=VALUE, not {text}");
+    let (target, value) = text.split_once('=').ok_or_else(usage)?;
+    let mut parts = target.split(':');
+    let (Some(table), Some(entity), Some(offset), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(usage());
+    };
+    Ok(FieldChange {
+        table: table.to_owned(),
+        entity: value::Uuid::parse(entity)
+            .ok_or_else(|| anyhow!("{entity} is not an entity identifier"))?,
+        offset: offset.parse().with_context(|| format!("offset {offset}"))?,
+        value: value.parse().with_context(|| format!("value {value}"))?,
+    })
 }
 
-fn poke(args: &Args, out: &mut impl Write) -> Result<()> {
+fn set(args: &Args, out: &mut impl Write) -> Result<()> {
     args.expect(
         3,
-        "poke <save> <folder> <name> [--file FILE] [--header-value HEX] [--set OFFSET=HEX,...]",
+        "set <save> <folder> <name> --u32 TABLE:ENTITY:OFFSET=VALUE,... [--file FILE]",
     )?;
+    let changes = args
+        .get("u32")
+        .ok_or_else(|| anyhow!("give the fields to change with --u32"))?
+        .split(',')
+        .map(parse_field_change)
+        .collect::<Result<Vec<_>>>()?;
     let save = Save::open(Path::new(&args.positional[0]))?;
     if let Support::ReadOnly(why) = save.support() {
         bail!("{why}");
     }
     let file = args.get("file").unwrap_or(save::GLOBALS);
     let mut document = save.lsf(file)?;
-    let before = NewAge::from_lsf(&document)?;
-    let mut entities = before.clone();
-    if let Some(value) = args.get("header-value") {
-        let value =
-            u64::from_str_radix(value, 16).with_context(|| format!("--header-value {value}"))?;
-        entities.set_header_value(value);
-    }
-    for change in args.get("set").into_iter().flat_map(|list| list.split(',')) {
-        let (offset, bytes) = change
-            .split_once('=')
-            .ok_or_else(|| anyhow!("--set takes OFFSET=HEX, not {change}"))?;
-        entities.poke(parse_number(offset)?, &parse_hex(bytes)?)?;
+    let mut entities = NewAge::from_lsf(&document)?;
+    let mut report = Vec::new();
+    for change in &changes {
+        let index = entities
+            .entity_index(change.entity)
+            .ok_or_else(|| anyhow!("no entity {} in {file}", change.entity))?;
+        let before = entities.get_u32(&change.table, index, change.offset)?;
+        entities.set_u32(&change.table, index, change.offset, change.value)?;
+        report.push(format!(
+            "  {} of {} at {}: {before} -> {}",
+            change.table, change.entity, change.offset, change.value
+        ));
     }
     entities.store(&mut document)?;
     let mut package = save.package.clone();
@@ -759,19 +756,20 @@ fn poke(args: &Args, out: &mut impl Write) -> Result<()> {
         &args.positional[2],
     )?;
 
-    // Report what differs from the original, read back from what was written.
+    // Read back what was written: the edits are there, the entity data still passes its
+    // checksum (parsing checks it), and every other file is as it was.
     let written = Save::open(&folder)?;
     let after = NewAge::from_lsf(&written.lsf(file)?)?;
-    let changed: Vec<usize> = (0..before.bytes().len())
-        .filter(|&i| before.bytes()[i] != after.bytes()[i])
-        .collect();
-    writeln!(out, "wrote {}", folder.display())?;
-    writeln!(
-        out,
-        "  {file}: {} bytes of entity data differ, at {:?}",
-        changed.len(),
-        changed
-    )?;
+    for change in &changes {
+        let index = after
+            .entity_index(change.entity)
+            .ok_or_else(|| anyhow!("entity {} is gone", change.entity))?;
+        ensure!(
+            after.get_u32(&change.table, index, change.offset)? == change.value,
+            "{}: the edit did not survive the write",
+            change.table
+        );
+    }
     for entry in save.package.entries() {
         if entry.name() != file {
             ensure!(
@@ -781,7 +779,11 @@ fn poke(args: &Args, out: &mut impl Write) -> Result<()> {
             );
         }
     }
-    writeln!(out, "  every other file is identical")?;
+    writeln!(out, "wrote {}", folder.display())?;
+    for line in report {
+        writeln!(out, "{line}")?;
+    }
+    writeln!(out, "  checksum updated; every other file is identical")?;
     Ok(())
 }
 
@@ -820,7 +822,7 @@ fn check_one(path: &Path) -> Result<String> {
         save.package.compute_md5()? == save.package.stored_md5(),
         "the header checksum does not match the contents"
     );
-    let (mut documents, mut nodes, mut attributes) = (0, 0, 0);
+    let (mut documents, mut nodes, mut attributes, mut blobs) = (0, 0, 0, 0);
     for name in save.lsf_names() {
         let bytes = save.package.read_file(name)?;
         let sections = Sections::read(&bytes).with_context(|| name.to_owned())?;
@@ -839,12 +841,23 @@ fn check_one(path: &Path) -> Result<String> {
                 lsf.attr_name(attr)
             );
         }
+        // Parsing the entity data checks its checksum, which the game checks too.
+        if let Some(attr) = NewAge::attribute(&lsf) {
+            let entities = NewAge::parse(lsf.attr_bytes(attr).to_vec())
+                .with_context(|| format!("{name}: entity data"))?;
+            ensure!(
+                entities.to_bytes() == lsf.attr_bytes(attr),
+                "{name}: rewritten entity data differs"
+            );
+            blobs += 1;
+        }
         documents += 1;
         nodes += lsf.node_count();
         attributes += lsf.attr_count();
     }
     Ok(format!(
-        "{documents} documents, {nodes} nodes, {attributes} values round-trip"
+        "{documents} documents, {nodes} nodes, {attributes} values round-trip; \
+         {blobs} entity checksums hold"
     ))
 }
 

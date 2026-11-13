@@ -112,8 +112,16 @@ directory that names every table in it (339 in a mid-Act 1 `Globals.lsf`). A tab
 array of fixed-size rows; where the game had a pointer, the row holds a 64-bit offset into
 the data section.
 
+- The header carries a checksum of everything after it: the first half of MurmurHash3
+  x64_128, with both halves of the state seeded with `0xf0015eed5eedf001`. The game checks
+  it. It holds for all 45 buffers in the samples, Patch 4 and 5 included. The function and
+  seed come from the notes in the [SaveForge](https://github.com/danaketh/SaveForge)
+  project's `newage.rs`.
+- Unused bytes (the first eight of the data section, padding in table records, the first
+  byte of the names) hold whatever was in memory. They count towards the checksum.
 - `core.v0.EntityId` starts with the entity list, 16 bytes per entity. These are the `Entity`
-  values from the node tree's `Creator` nodes.
+  values from the node tree's `Creator` nodes. The rest of that table is identifiers that
+  other rows point at, so the same identifier repeats there.
 - An owner map says, for each component table, which entity each row belongs to.
 - So a party member's data is reached as: template → `Creator.Entity` → index in the entity
   list → row of a table.
@@ -149,23 +157,25 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | None, but every document parsed, written and compressed again by this code | Loads |
 | A byte-for-byte copy in a folder with another save name, files inside not renamed | Listed without its screenshot; loading hangs at 0% |
 | The same copy with the files inside renamed to match the folder | Loads |
-| Every party member's experience set to 6000 in the entity data (16 bytes changed), nothing else | Fails to load; the game returns to the main menu |
+| None, exported by this code as a new folder with matching file names | Loads |
+| Every party member's experience set to 6000 in the entity data, checksum left as it was | Fails |
+| One bit of the entity data's checksum flipped, nothing else | Fails |
+| The checksum set to zero, nothing else | Fails |
+| One unused byte at the start of the data section changed | Fails |
+| One unused byte at the start of the directory changed | Fails |
+| One character's experience raised by one, checksum left as it was or set to zero | Fails |
 
-So the game accepts this code's LZ4 and Zstandard output and its package layout, and something
-detects a change to the entity data.
+Every failure looks the same: the save loads to 100%, drops to the title screen, and shows
+"Server shutting down". Other saves load normally afterwards.
+
+So the game accepts this code's LZ4 and Zstandard output, its package layout and its export
+folders, and it refuses any entity data whose checksum does not match. The checksum function
+above predicts each of these results.
 
 ## Not yet known
 
-- **What detects a change to the entity data.** The suspect is the 8-byte value at offset 8 of
-  the `LSMF` header. It differs in every buffer, is identical where the buffer is identical,
-  is not stored anywhere else in the save, and is not a function of the table list or row
-  counts: nine buffers with the same tables and row counts have seven different values. If it is a
-  checksum, the function is not one of these, over the data section, the directory, both, the
-  whole buffer with the value zeroed or removed, or seventeen other ranges: xxHash32/64, XXH3
-  (64 and 128), MurmurHash2 64A, MurmurHash3, CityHash (32, 64, 128), FarmHash, MetroHash,
-  SpookyHash, rapidhash, SipHash-2-4 and 1-3, FNV-1 and FNV-1a, seven CRC-64 and seven CRC-32
-  variants including CRC-32C, Adler-32, plain sums and XORs of 8- to 64-bit words, or the
-  start of an MD5, SHA-1, SHA-2, SHA-3, BLAKE2 or BLAKE3 digest.
+- **Whether an edit with a correct checksum loads and takes effect.** Nothing else is known
+  to stand in the way, but it has not been tried.
 - Whether the game checks the package's MD5 or the per-mod MD5s on load.
 - Whether an exported copy should also get its own name inside the package, in
   `SaveInfo.json` and the screenshot entry. It loads without.
