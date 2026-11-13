@@ -42,9 +42,16 @@ Built, and its output loads in the game (see Status).
 
 ### Phase 2: edits, in this order
 
-1. **Party.** Per character: level and experience, ability scores. Party-wide: Inspiration and
-   camp supplies.
-2. **Inventory.** Stack quantities and gold, for each character and the camp chest.
+1. **Party.** Per character: experience, level-ups, ability scores and gold. Party-wide:
+   Inspiration.
+   - A level-up is granted, not applied: the editor entitles the character to the next level
+     and the game takes the player through the choices.
+   - Ability scores are changed through the points allocated to each ability; the game adds
+     the character's other bonuses on top.
+   - Gold is per character. A character who carries none can't be given any until items can
+     be added (Phase 3).
+2. **Inventory.** Stack quantities, for each character and the camp chest. Camp supplies
+   belong here: the game works the total out from the food items.
 3. **Approval.** Companion approval values.
 4. **Mods.** The save's list of required mods, with removal of ones that are no longer
    installed.
@@ -91,6 +98,12 @@ Tried in the game so far:
   load, so those edits have to be made to whatever they are calculated from.
 - Ability scores are calculated from the points allocated at character creation, and a change
   to those sticks.
+- Entitling a character to the next level makes the game offer the level-up. Changes to the
+  party's Inspiration and to a gold stack stick.
+
+Every value planned for the Party tab is now located, has a function in `src/party.rs` to
+read and change it, and has been changed in a save that then loaded with the new value. The
+functions reproduce those saves byte for byte.
 - The load menu lists a save under its folder's name, so an export can be a new folder beside
   the original, as planned. The files inside have to be named after it, or the copy hangs on
   loading.

@@ -359,6 +359,62 @@ impl NewAge {
         out
     }
 
+    /// Which table and row the data-section offset `offset` falls in, and how far into the
+    /// row. Rows point at other rows with offsets like this.
+    pub fn locate(&self, offset: u64) -> Option<(TableId, usize, usize)> {
+        let at = usize::try_from(offset).ok()?.checked_add(HEADER_LEN)?;
+        // Tables are few (a few hundred), so a scan is quick enough.
+        self.tables.iter().enumerate().find_map(|(id, t)| {
+            let inside = at >= t.start && at < t.start + t.rows * t.row_len;
+            inside.then(|| (id, (at - t.start) / t.row_len, (at - t.start) % t.row_len))
+        })
+    }
+
+    /// The entity whose identifier sits at data-section offset `offset`. This is how a row
+    /// refers to an entity: with an offset into the entity table.
+    pub fn entity_at(&self, offset: u64) -> Option<u32> {
+        let (table, row, within) = self.locate(offset)?;
+        if table != self.entities || within != 0 {
+            return None;
+        }
+        let mut id = [0u8; 16];
+        id.copy_from_slice(self.row(table, row));
+        self.by_entity.get(&id).copied()
+    }
+
+    /// The `len` bytes at data-section offset `offset`.
+    pub fn data(&self, offset: u64, len: usize) -> Result<&[u8]> {
+        let range = self.data_span(offset, len)?;
+        Ok(&self.bytes[range])
+    }
+
+    /// Overwrites the bytes at data-section offset `offset`.
+    pub fn set_data(&mut self, offset: u64, bytes: &[u8]) -> Result<()> {
+        let range = self.data_span(offset, bytes.len())?;
+        self.bytes[range].copy_from_slice(bytes);
+        Ok(())
+    }
+
+    fn data_span(&self, offset: u64, len: usize) -> Result<std::ops::Range<usize>> {
+        let data_len = u64_at(&self.bytes, 16);
+        ensure!(
+            offset
+                .checked_add(len as u64)
+                .is_some_and(|end| end <= data_len),
+            "offset {offset} is outside the entity data"
+        );
+        let start = HEADER_LEN + offset as usize;
+        Ok(start..start + len)
+    }
+
+    /// The rows of a component table with the entity that owns each.
+    pub fn owned_rows(&self, table: TableId) -> impl Iterator<Item = (usize, u32)> + '_ {
+        let t = &self.tables[table];
+        let owners = t.owners;
+        (0..if owners.is_some() { t.rows } else { 0 })
+            .map(move |row| (row, u32_at(&self.bytes, owners.unwrap_or(0) + row * 4)))
+    }
+
     /// Where `row` of `table` starts in the blob.
     pub fn row_offset(&self, table: TableId, row: usize) -> usize {
         let t = &self.tables[table];
@@ -791,6 +847,50 @@ mod tests {
         blob.set_u32(POINTERS, 1, 0, begin + 100).unwrap();
         assert!(blob.get_array_u32(POINTERS, 1, 0).is_err());
         NewAge::parse(blob.to_bytes()).unwrap();
+    }
+
+    #[test]
+    fn finds_what_an_offset_points_at() {
+        let mut blob = NewAge::parse(sample()).unwrap();
+        let table = blob.table(EXPERIENCE).unwrap();
+        let second_row = (blob.row_offset(table, 1) - 48) as u64;
+        assert_eq!(blob.locate(second_row), Some((table, 1, 0)));
+        assert_eq!(blob.locate(second_row + 5), Some((table, 1, 5)));
+        assert_eq!(
+            blob.locate(0),
+            None,
+            "the unused bytes before the first table"
+        );
+        assert_eq!(blob.locate(u64::MAX), None);
+
+        // An offset into the entity table names an entity, whether it lands in the list or
+        // on a later row that repeats an identifier.
+        let entities = blob.table("core.v0.EntityId").unwrap();
+        let third = (blob.row_offset(entities, 2) - 48) as u64;
+        assert_eq!(blob.entity_at(third), Some(2));
+        let repeat = (blob.row_offset(entities, 3) - 48) as u64;
+        assert_eq!(
+            blob.entity_at(repeat),
+            Some(0),
+            "the builder repeats the first entity"
+        );
+        assert_eq!(
+            blob.entity_at(third + 4),
+            None,
+            "not the start of an identifier"
+        );
+        assert_eq!(blob.entity_at(second_row), None, "not in the entity table");
+
+        assert_eq!(blob.data(second_row, 4).unwrap(), 5595u32.to_le_bytes());
+        blob.set_data(second_row, &7u32.to_le_bytes()).unwrap();
+        assert_eq!(blob.get_u32(EXPERIENCE, 1, 0).unwrap(), 7);
+        assert!(blob.data(u64::MAX - 1, 4).is_err());
+        assert!(blob.set_data(1 << 40, &[0]).is_err());
+
+        let owned: Vec<(usize, u32)> = blob.owned_rows(table).collect();
+        assert_eq!(owned, [(0, 2), (1, 1)]);
+        let strings = blob.table("core.v0.TranslatedString").unwrap();
+        assert_eq!(blob.owned_rows(strings).count(), 0);
     }
 
     #[test]

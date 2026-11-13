@@ -6,6 +6,7 @@ use nautiloid_save_editor::diff;
 use nautiloid_save_editor::lsf::{Lsf, NodeId, Sections};
 use nautiloid_save_editor::lspk::Method;
 use nautiloid_save_editor::newage::NewAge;
+use nautiloid_save_editor::party::{self, Party};
 use nautiloid_save_editor::save::{self, Save, Support};
 use nautiloid_save_editor::value;
 use std::collections::BTreeMap;
@@ -29,7 +30,15 @@ A <save> is a .lsv file or the save folder that holds one.
   diff <save> <save> [--file FILE] [--grep TEXT] [--limit N] [--summary]
       What differs between two saves, document by document.
   party <save>
-      The party as the entity data has it: level, experience and ability scores.
+      The party as the entity data has it: level, experience, ability scores, gold and
+      Inspiration.
+  edit <save> <folder> <name> [--xp WHO=N,...] [--level-up WHO,...]
+       [--ability WHO:ABILITY=POINTS,...] [--gold WHO=N,...] [--inspiration N]
+      Write a copy of the save as a new save called <name> under <folder>, with the party
+      changed. WHO is a character's name or the start of their entity identifier.
+      --xp sets total experience. --level-up entitles a character to one more level, which
+      the game then offers. --ability sets the points put into an ability above 8.
+      --gold sets the character's largest loose stack of gold.
   tables <save> <file.lsf>
       The tables in a document's entity data (its NewAge blob).
   rows <save> <file.lsf> <table> [--limit N]
@@ -135,6 +144,14 @@ fn run(raw: &[String]) -> Result<()> {
             out,
         ),
         "party" => party(&Args::parse(rest, &[], &[])?, out),
+        "edit" => edit(
+            &Args::parse(
+                rest,
+                &[],
+                &["xp", "level-up", "ability", "gold", "inspiration"],
+            )?,
+            out,
+        ),
         "tables" => tables(&Args::parse(rest, &[], &[])?, out),
         "rows" => rows(&Args::parse(rest, &[], &["limit"])?, out),
         "set" => set(&Args::parse(rest, &[], &["file", "u32"])?, out),
@@ -507,39 +524,181 @@ fn compare(args: &Args, out: &mut impl Write) -> Result<()> {
     Ok(())
 }
 
+fn print_party(party: &Party, out: &mut impl Write) -> Result<()> {
+    for c in &party.characters {
+        writeln!(
+            out,
+            "{}  {}",
+            c.name.as_deref().unwrap_or("(no name)"),
+            c.entity
+        )?;
+        let pending = if c.entitled_level > c.level {
+            format!(" (entitled to level {})", c.entitled_level)
+        } else {
+            String::new()
+        };
+        writeln!(
+            out,
+            "    level {}{pending}, experience {}, template {}",
+            c.level, c.experience, c.template
+        )?;
+        let totals: Vec<String> = party::ABILITIES
+            .iter()
+            .zip(c.abilities)
+            .map(|(name, total)| format!("{} {total}", &name[..3]))
+            .collect();
+        writeln!(out, "    abilities  {}", totals.join("  "))?;
+        if let Some(allocated) = c.allocated {
+            let points: Vec<String> = party::ABILITIES
+                .iter()
+                .zip(allocated)
+                .map(|(name, points)| format!("{} {points}", &name[..3]))
+                .collect();
+            writeln!(
+                out,
+                "    allocated  {}  (points above {})",
+                points.join("  "),
+                party::ABILITY_BASE
+            )?;
+        }
+        let stacks: Vec<String> = c
+            .gold
+            .iter()
+            .map(|g| {
+                format!(
+                    "{}{}",
+                    g.amount,
+                    if g.in_container {
+                        " in a container"
+                    } else {
+                        ""
+                    }
+                )
+            })
+            .collect();
+        writeln!(
+            out,
+            "    gold {}{}",
+            c.gold_total(),
+            if stacks.len() > 1 {
+                format!(" ({})", stacks.join(", "))
+            } else {
+                String::new()
+            }
+        )?;
+    }
+    writeln!(out, "party gold {}", party.gold_total())?;
+    if let Some(inspiration) = party.inspiration {
+        writeln!(
+            out,
+            "inspiration {} of {}",
+            inspiration.amount, inspiration.max
+        )?;
+    }
+    if let Some(supplies) = party.camp_supplies {
+        writeln!(out, "camp supplies {supplies}")?;
+    }
+    Ok(())
+}
+
 fn party(args: &Args, out: &mut impl Write) -> Result<()> {
     args.expect(1, "party <save>")?;
     let save = Save::open(Path::new(&args.positional[0]))?;
     let globals = save.lsf(save::GLOBALS)?;
     let entities = NewAge::from_lsf(&globals)?;
-    writeln!(
-        out,
-        "{:<36}  {:<36}  level  experience  Str Dex Con Int Wis Cha",
-        "entity", "template"
+    print_party(&party::read(&globals, &entities)?, out)
+}
+
+/// The party member called `who`: by name, or by the start of their entity identifier.
+fn who<'a>(party: &'a Party, who: &str) -> Result<&'a party::Character> {
+    let wanted = who.to_lowercase();
+    let mut matches = party.characters.iter().filter(|c| {
+        c.name
+            .as_deref()
+            .is_some_and(|n| n.to_lowercase() == wanted)
+            || c.entity.to_string().starts_with(&wanted)
+    });
+    match (matches.next(), matches.next()) {
+        (Some(character), None) => Ok(character),
+        (None, _) => bail!("no party member called {who}"),
+        (Some(_), Some(_)) => bail!("more than one party member matches {who}"),
+    }
+}
+
+fn edit(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(
+        3,
+        "edit <save> <folder> <name> [--xp WHO=N,...] [--level-up WHO,...] \
+         [--ability WHO:ABILITY=POINTS,...] [--gold WHO=N,...] [--inspiration N]",
     )?;
-    for c in save::party(&globals, &entities)? {
-        let abilities: Vec<String> = c.abilities.iter().map(|a| format!("{a:>3}")).collect();
-        writeln!(
-            out,
-            "{}  {:<36}  {:>5}  {:>10}  {}",
-            c.entity,
-            c.template,
-            c.level,
-            c.experience,
-            abilities.join(" ")
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    if let Support::ReadOnly(why) = save.support() {
+        bail!("{why}");
+    }
+    let mut globals = save.lsf(save::GLOBALS)?;
+    let mut entities = NewAge::from_lsf(&globals)?;
+    let before = party::read(&globals, &entities)?;
+    let list = |name: &str| args.get(name).into_iter().flat_map(|l| l.split(','));
+    let number = |text: &str| {
+        text.parse::<u32>()
+            .with_context(|| format!("{text} is not a number"))
+    };
+
+    for item in list("xp") {
+        let (name, total) = item
+            .split_once('=')
+            .ok_or_else(|| anyhow!("--xp takes WHO=N"))?;
+        party::set_experience(&mut entities, who(&before, name)?.entity, number(total)?)?;
+    }
+    for name in list("level-up") {
+        let character = who(&before, name)?;
+        party::set_entitled_level(&mut entities, character.entity, character.level + 1)?;
+    }
+    for item in list("ability") {
+        let usage = || anyhow!("--ability takes WHO:ABILITY=POINTS, not {item}");
+        let (target, points) = item.split_once('=').ok_or_else(usage)?;
+        let (name, ability) = target.split_once(':').ok_or_else(usage)?;
+        let ability = party::ABILITIES
+            .iter()
+            .position(|a| a.to_lowercase().starts_with(&ability.to_lowercase()))
+            .ok_or_else(|| anyhow!("{ability} is not an ability"))?;
+        party::set_allocated(
+            &mut entities,
+            who(&before, name)?.entity,
+            ability,
+            number(points)?,
         )?;
     }
-    if let Some(table) = entities.table(save::fields::CAMP_SUPPLIES) {
-        if entities.tables()[table].rows == 1 {
-            let row = entities.row(table, 0);
-            writeln!(
-                out,
-                "camp supplies {}",
-                u32::from_le_bytes([row[0], row[1], row[2], row[3]])
-            )?;
-        }
+    for item in list("gold") {
+        let (name, amount) = item
+            .split_once('=')
+            .ok_or_else(|| anyhow!("--gold takes WHO=N"))?;
+        let character = who(&before, name)?;
+        // The reader lists a character's loose stacks first, largest first.
+        let stack = character.gold.first().ok_or_else(|| {
+            anyhow!("{name} carries no gold to change; adding items is not supported yet")
+        })?;
+        party::set_gold(&mut entities, stack.item, number(amount)?)?;
     }
-    Ok(())
+    if let Some(amount) = args.get("inspiration") {
+        party::set_inspiration(&mut entities, number(amount)?)?;
+    }
+
+    entities.store(&mut globals)?;
+    let mut package = save.package.clone();
+    package.replace(save::GLOBALS, &globals.write()?)?;
+    let folder = save::export_copy(
+        &save,
+        &package,
+        Path::new(&args.positional[1]),
+        &args.positional[2],
+    )?;
+    // Show the party as the written save has it.
+    let written = Save::open(&folder)?;
+    let globals = written.lsf(save::GLOBALS)?;
+    let after = party::read(&globals, &NewAge::from_lsf(&globals)?)?;
+    writeln!(out, "wrote {}", folder.display())?;
+    print_party(&after, out)
 }
 
 fn tables(args: &Args, out: &mut impl Write) -> Result<()> {

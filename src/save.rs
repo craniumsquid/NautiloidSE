@@ -3,8 +3,6 @@
 
 use crate::lsf::{Header, Lsf, Sections};
 use crate::lspk::Package;
-use crate::newage::NewAge;
-use crate::value::Uuid;
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use serde_json::Value as Json;
 use std::path::{Path, PathBuf};
@@ -310,81 +308,6 @@ pub fn mods(meta: &Lsf) -> Result<Vec<ModEntry>> {
             uuid: field(m, "UUID"),
         })
         .collect())
-}
-
-/// Tables and field offsets in the entity data. Each was found by matching known values
-/// (the party's level and experience from `SaveInfo.json`) across the sample saves.
-pub mod fields {
-    /// Rows of 12 bytes. The first two u32 both hold the character's total experience. A
-    /// change to both sticks; the game shows it as experience into the current level.
-    pub const EXPERIENCE: &str = "game.experience.v0.ExperienceComponent";
-    pub const EXPERIENCE_TOTAL: [usize; 2] = [0, 4];
-    /// Rows of 4 bytes: the character level.
-    pub const LEVEL: &str = "game.stats.v0.LevelComponent";
-    /// Rows of 36 bytes. Strength, Dexterity, Constitution, Intelligence, Wisdom and Charisma
-    /// are six u32 starting at offset 8. These are totals; the game recalculates them on
-    /// load, so they can be read but a change to them is discarded.
-    pub const STATS: &str = "game.stats.v3.StatsComponent";
-    pub const STATS_ABILITIES: usize = 8;
-    /// One row of 4 bytes: the camp supplies total. The game recalculates it on load.
-    pub const CAMP_SUPPLIES: &str = "game.camp.v0.TotalSuppliesComponent";
-    /// Rows of 88 bytes. At offset 72 is a pair of offsets to seven u32: the points put into
-    /// each ability at character creation, above the base of 8. Index 1 is Strength and
-    /// index 6 Charisma. The game works the ability scores out from these on load.
-    pub const CREATION_STATS: &str = "game.character_creation.v1.CharacterCreationStatsComponent";
-    pub const CREATION_ABILITIES: usize = 72;
-}
-
-/// A party member as the entity data in `Globals.lsf` describes them.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Character {
-    /// The entity's identifier in the save.
-    pub entity: Uuid,
-    /// The template the character was created from: a companion's fixed identifier, or the
-    /// base template of a custom character.
-    pub template: String,
-    pub level: u32,
-    pub experience: u32,
-    /// Strength, Dexterity, Constitution, Intelligence, Wisdom, Charisma.
-    pub abilities: [u32; 6],
-}
-
-/// The characters that have experience, which is the party, in the order the save lists them.
-pub fn party(globals: &Lsf, entities: &NewAge) -> Result<Vec<Character>> {
-    // The node tree lists every character's entity identifier beside its template.
-    let mut templates = std::collections::HashMap::new();
-    if let Some(creators) = globals.find(&["Characters", "CharacterFactory", "Creators"]) {
-        for creator in globals.children_named(creators, "Creator") {
-            if let (Some(entity), Some(template)) = (
-                globals.get(creator, "Entity").and_then(|v| v.as_uuid()),
-                globals.get(creator, "TemplateID"),
-            ) {
-                templates.insert(entity, template.as_str().unwrap_or_default().to_owned());
-            }
-        }
-    }
-    let experience = entities
-        .table(fields::EXPERIENCE)
-        .ok_or_else(|| anyhow!("the save has no {} table", fields::EXPERIENCE))?;
-    let mut party = Vec::new();
-    for row in 0..entities.tables()[experience].rows {
-        let index = entities
-            .owner(experience, row)
-            .ok_or_else(|| anyhow!("{} is not a component table", fields::EXPERIENCE))?;
-        let entity = entities.entity_id(index);
-        let mut abilities = [0u32; 6];
-        for (i, ability) in abilities.iter_mut().enumerate() {
-            *ability = entities.get_u32(fields::STATS, index, fields::STATS_ABILITIES + i * 4)?;
-        }
-        party.push(Character {
-            entity,
-            template: templates.get(&entity).cloned().unwrap_or_default(),
-            level: entities.get_u32(fields::LEVEL, index, 0)?,
-            experience: entities.get_u32(fields::EXPERIENCE, index, fields::EXPERIENCE_TOTAL[0])?,
-            abilities,
-        });
-    }
-    Ok(party)
 }
 
 #[cfg(test)]

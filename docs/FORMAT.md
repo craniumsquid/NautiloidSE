@@ -136,11 +136,15 @@ every Patch 8 sample:
 | `game.stats.v3.StatsComponent` | 36 bytes | Strength to Charisma as six u32 from offset 8. These are totals with every bonus applied (an item that sets a score shows here). **Recalculated on load**: a change here is discarded |
 | `game.camp.v0.TotalSuppliesComponent` | 4 bytes | Camp supplies total. One row. **Recalculated on load**: a change here is discarded |
 | `game.character_creation.v1.CharacterCreationStatsComponent` | 88 bytes | Two identifiers (probably race and subrace), the character's name (offset and length at 56 and 64), and at 72 a pair of offsets to seven u32: the points put into each ability above the base of 8, with Strength at index 1. Seven characters have a row in the sample, the four party members among them. **Editable**: the game works ability scores out from these on load, and does not hold them to the usual limit of 7 |
-| `game.experience.v0.AvailableLevelComponent` | 4 bytes | Equal to the character level for every character in the samples. Probably the level the character is entitled to: experience raised past a threshold on its own does not make the game offer a level-up |
+| `game.experience.v0.AvailableLevelComponent` | 4 bytes | The level the character is entitled to. Equal to the character level in every sample. **Editable**: set one above the level, the game offers a level-up. Raising experience past a threshold does not do this on its own |
 | `game.inventory.v0.NewStackComponent` | 8 bytes | One per stack of items: an offset to a row of `game.inventory.v0.Stack`. That row is two pairs of offsets: the stack's items (offsets to their entity identifiers) and its entries (rows of `StackEntry`: a u16 index into the items, two unused bytes, a u32 amount). Gold is a stack whose item has the template `1c3c9c74-34a1-4685-989e-410dc080be6f`. Each character or container holding gold has its own stack, and the game's top bar shows the party's sum. In the sample all of the party's gold is on one character, with nine more gold stacks on other entities |
 | `game.inventory.v0.MemberComponent` | 8 bytes | On an item: an offset to a row of `MemberData`, which is an offset to the entity identifier of the inventory the item is in, then its slot number |
 | `game.inventory.v1.IsOwnedComponent` | 8 bytes | On an inventory: an offset to the entity identifier of its owner. An item inside a bag is in the bag's inventory, whose owner is the bag, so finding the character means following this up |
 | `game.action_resources.v1.Component` | 16 bytes | A pair of offsets to 64-byte entries: a resource identifier, a level, then the amount and the maximum as 64-bit floats. Action points, movement, spell slots and class resources appear here. The party has its own entity, the one that owns the `game.party.*` rows, and it holds three more: `c38dea32-f5cb-4e38-a341-eb3fa653fb3e` matches the Inspiration count the game shows, and `a24ca5e2-01e1-48fd-a4c8-79b8817f0a18` is 2 of 2, probably short rests |
+
+Not every party member has all of this. A character played as an origin has an empty name
+in the character creation record (Gale, in the Honour Mode sample), and a game that has only
+just begun has no Inspiration resource yet.
 
 Many rows hold a pair of offsets like these, begin and end, to an array elsewhere in the data
 section. The level-up tables (`game.character_creation.v3.LevelUpComponent` and
@@ -177,6 +181,7 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | Every party member's experience set to 6000, checksum recomputed | Loads. Each shows 2750, which is 6000 less the 3250 at which level 5 starts in that game |
 | One character's experience set to 7100, another's Strength total 18 → 20, camp supplies total 660 → 700, checksum recomputed | Loads. Experience shows 600 and no level-up is offered; Strength is still 18 and camp supplies still 660 |
 | Points allocated to Strength at character creation: 0 → 7 for one character, 7 → 9 for another | Loads. Strength shows 15 (was 8) and 20 (was 18) |
+| One character's experience set to 7100 and entitled level 5 → 6; the party's Inspiration 6 → 3; that character's gold stack 3,385 → 5,000 | Loads. A level-up is offered, Inspiration shows 3, and gold shows 5,000 on that character and in the party total |
 
 Every failure looks the same: the save loads to 100%, drops to the title screen, and shows
 "Server shutting down". Other saves load normally afterwards.
@@ -188,14 +193,13 @@ sticks depends on whether the game keeps the value or works it out again from so
 
 ## Not yet known
 
-- **Whether changes to the level a character is entitled to, the party's Inspiration and a
-  gold stack's amount stick.** Each has been located by matching the number the game shows;
-  a test of all three is out.
 - What sets the experience thresholds. The 7100 test shows 600, which fits a level 6
   threshold of 6500 in that modded game; an unmodded game's is 14000.
 - Where the bonuses on top of the allocated points are recorded (the +2 and +1 chosen at
   creation, and ability improvements taken at level-up).
 - Where camp supplies come from. The total is recalculated, presumably from the food items.
+- How to give gold to a character who carries none. There is no stack to change, so it means
+  creating an item.
 - Whether the game checks the package's MD5 or the per-mod MD5s on load.
 - Whether an exported copy should also get its own name inside the package, in
   `SaveInfo.json` and the screenshot entry. It loads without.

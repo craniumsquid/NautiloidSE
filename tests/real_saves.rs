@@ -7,6 +7,7 @@
 use nautiloid_save_editor::lsf::{Lsf, Sections};
 use nautiloid_save_editor::lspk::{Method, Package};
 use nautiloid_save_editor::newage::NewAge;
+use nautiloid_save_editor::party;
 use nautiloid_save_editor::save::{self, Save, Support};
 use nautiloid_save_editor::value;
 use std::path::PathBuf;
@@ -192,8 +193,10 @@ fn entity_data_parses_and_matches_the_summary() {
         }
         let globals = save.lsf(save::GLOBALS).unwrap();
         let entities = NewAge::from_lsf(&globals).unwrap();
-        let mut found: Vec<(u32, u64)> = save::party(&globals, &entities)
-            .unwrap_or_else(|e| panic!("{}: {e:#}", path.display()))
+        let read = party::read(&globals, &entities)
+            .unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
+        let mut found: Vec<(u32, u64)> = read
+            .characters
             .iter()
             .map(|c| (c.level, c.experience as u64))
             .collect();
@@ -208,5 +211,97 @@ fn entity_data_parses_and_matches_the_summary() {
         found.sort();
         expected.sort();
         assert_eq!(found, expected, "{}", path.display());
+
+        // In every sample no level-up is pending and each party member has a character
+        // creation record. A character played as an origin has no name stored, and a game
+        // that has just begun has no Inspiration yet.
+        for c in &read.characters {
+            assert_eq!(c.entitled_level, c.level, "{}", path.display());
+            assert!(c.allocated.is_some(), "{}", path.display());
+        }
+        if let Some(inspiration) = read.inspiration {
+            assert!(inspiration.amount <= inspiration.max, "{}", path.display());
+        }
+    }
+}
+
+#[test]
+fn party_edits_read_back_from_a_written_save() {
+    for path in saves() {
+        let save = Save::open(&path).unwrap();
+        if save.support() != Support::Editable {
+            continue;
+        }
+        let label = path.display().to_string();
+        let mut globals = save.lsf(save::GLOBALS).unwrap();
+        let mut entities = NewAge::from_lsf(&globals).unwrap();
+        let before = party::read(&globals, &entities).unwrap();
+        let first = &before.characters[0];
+
+        // One of each edit, on the first character.
+        party::set_experience(&mut entities, first.entity, first.experience + 123).unwrap();
+        party::set_entitled_level(&mut entities, first.entity, first.level + 1).unwrap();
+        let points = first.allocated.unwrap()[0];
+        party::set_allocated(&mut entities, first.entity, 0, points + 1).unwrap();
+        let gold = before.characters.iter().flat_map(|c| &c.gold).next();
+        if let Some(stack) = gold {
+            party::set_gold(&mut entities, stack.item, stack.amount + 1000).unwrap();
+        }
+        let fewer = before.inspiration.map(|i| i.amount.saturating_sub(1));
+        if let Some(fewer) = fewer {
+            party::set_inspiration(&mut entities, fewer).unwrap();
+        }
+
+        // Through the whole export path: into the document, into the package, out to bytes
+        // and back.
+        entities.store(&mut globals).unwrap();
+        let mut package = save.package.clone();
+        package
+            .replace(save::GLOBALS, &globals.write().unwrap())
+            .unwrap();
+        let written = Package::read(package.write().unwrap()).unwrap();
+        assert_eq!(
+            written.compute_md5().unwrap(),
+            written.stored_md5(),
+            "{label}"
+        );
+        let globals = Lsf::parse(&written.read_file(save::GLOBALS).unwrap()).unwrap();
+        let entities = NewAge::from_lsf(&globals).unwrap_or_else(|e| panic!("{label}: {e:#}"));
+        let after = party::read(&globals, &entities).unwrap();
+
+        let mut expected = before.clone();
+        expected.characters[0].experience += 123;
+        expected.characters[0].entitled_level += 1;
+        expected.characters[0].allocated.as_mut().unwrap()[0] += 1;
+        if let Some(stack) = gold {
+            for c in &mut expected.characters {
+                for g in &mut c.gold {
+                    if g.item == stack.item {
+                        g.amount += 1000;
+                    }
+                }
+                c.gold.sort_by(|a, b| {
+                    (a.in_container, std::cmp::Reverse(a.amount), a.item.0).cmp(&(
+                        b.in_container,
+                        std::cmp::Reverse(b.amount),
+                        b.item.0,
+                    ))
+                });
+            }
+        }
+        if let (Some(inspiration), Some(fewer)) = (expected.inspiration.as_mut(), fewer) {
+            inspiration.amount = fewer;
+        }
+        assert_eq!(after, expected, "{label}");
+        // Every other file in the save is untouched.
+        for entry in save.package.entries() {
+            if entry.name() != save::GLOBALS {
+                assert!(
+                    save.package.unpack(entry).unwrap() == written.read_file(entry.name()).unwrap(),
+                    "{label}: {}",
+                    entry.name()
+                );
+            }
+        }
     }
 }

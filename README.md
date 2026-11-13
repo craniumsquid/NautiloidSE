@@ -17,7 +17,7 @@ cargo run --release --bin nautiloid-cli -- info "path/to/save folder"
 ```
 
 Run it without arguments for the other commands: `list`, `dump`, `find`, `diff`, `party`,
-`tables`, `rows`, `check`, `extract`, `rewrite` and `set`.
+`edit`, `tables`, `rows`, `check`, `extract`, `rewrite` and `set`.
 
 ## Tests
 
