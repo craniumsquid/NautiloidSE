@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Nautiloid Save Editor</string>
+	<key>CFBundleDisplayName</key>
+	<string>Nautiloid Save Editor</string>
+	<key>CFBundleIdentifier</key>
+	<string>app.nautiloid.SaveEditor</string>
+	<key>CFBundleExecutable</key>
+	<string>nautiloid-save-editor</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<!-- The build sets both versions from Cargo.toml. -->
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>0.0.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+</dict>
+</plist>

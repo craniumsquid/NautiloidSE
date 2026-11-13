@@ -1,0 +1,4 @@
+# Link the C runtime into the Windows build, so it runs without the Visual C++ runtime
+# installed.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

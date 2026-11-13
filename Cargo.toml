@@ -6,6 +6,8 @@ rust-version = "1.88"
 license = "GPL-3.0-only"
 description = "Save editor for Baldur's Gate 3 (Patch 8)"
 readme = "README.md"
+# What `cargo run` starts: the editor, not the command-line tool.
+default-run = "nautiloid-save-editor"
 
 [[bin]]
 name = "nautiloid-save-editor"

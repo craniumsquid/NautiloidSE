@@ -3,6 +3,12 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      macos:
+        description: Also build the app for macOS
+        type: boolean
+        default: false
 
 jobs:
   test:
@@ -18,3 +24,84 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       # Real saves are private, so the checks against them skip themselves here.
       - run: cargo test
+
+  # The app, to download from the run's page. Built for main, for version tags, when the
+  # workflow is run by hand, and for any push whose commit message contains [build].
+  build:
+    name: Build (${{ matrix.name }})
+    needs: test
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/tags/v') ||
+      contains(github.event.head_commit.message, '[build]')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+          # Not ubuntu-latest: a newer system would make a build that older ones can't run.
+          - name: linux-x64
+            os: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.97.0
+      - run: cargo build --release --locked --bin nautiloid-save-editor
+      - name: Gather the files
+        shell: bash
+        run: |
+          mkdir -p upload files
+          cp LICENSE assets/fonts/OFL-*.txt files/
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp target/release/nautiloid-save-editor.exe files/
+            mv files/* upload/
+          else
+            # In an archive, so the file stays marked as a program.
+            cp target/release/nautiloid-save-editor files/
+            tar -czf "upload/nautiloid-save-editor-${{ matrix.name }}.tar.gz" \
+              --transform 's,^files,nautiloid-save-editor,' files
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nautiloid-save-editor-${{ matrix.name }}
+          path: upload/
+          if-no-files-found: error
+          retention-days: 30
+
+  # A macOS runner uses ten times the minutes of a Linux one, so this is only built for
+  # version tags and when asked for in a run by hand.
+  build-macos:
+    name: Build (macos-arm64)
+    needs: test
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.macos)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.97.0
+      - run: cargo build --release --locked --bin nautiloid-save-editor
+      - name: Make the app bundle
+        run: |
+          app="Nautiloid Save Editor.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" upload
+          cp target/release/nautiloid-save-editor "$app/Contents/MacOS/"
+          cp packaging/macos/Info.plist "$app/Contents/"
+          cp LICENSE assets/fonts/OFL-*.txt "$app/Contents/Resources/"
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          /usr/libexec/PlistBuddy \
+            -c "Set :CFBundleShortVersionString $version" \
+            -c "Set :CFBundleVersion $version" \
+            "$app/Contents/Info.plist"
+          # Signed for this machine only: enough to run, not enough to pass Gatekeeper
+          # unasked.
+          codesign --force --sign - "$app"
+          ditto -c -k --keepParent "$app" upload/nautiloid-save-editor-macos-arm64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nautiloid-save-editor-macos-arm64
+          path: upload/
+          if-no-files-found: error
+          retention-days: 30

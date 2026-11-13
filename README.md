@@ -1,11 +1,70 @@
 # Nautiloid Save Editor
 
 A desktop save editor for **Baldur's Gate 3** (Patch 8) on Windows, macOS and Linux, including
-Steam Deck. It is at an early stage: the code that reads and writes saves exists and is tested;
-the editor's interface does not exist yet, and nothing has been tried in the game.
+Steam Deck.
+
+![The Party tab with four changes made](docs/images/party.png)
+
+The save you open is never changed. Edits go into a new save, which the game lists beside the
+original, and the new save is read back and checked before the editor keeps it.
+
+## What it can change
+
+So far, the party:
+
+- **Experience**, for each character.
+- **Level-ups.** The editor entitles a character to the next level, and the game offers the
+  level-up and takes you through the choices.
+- **Ability points**: the points put into each ability at character creation. The game adds
+  the character's other bonuses on top.
+- **Gold**, for a character who already carries some.
+- **Inspiration**, once the party has earned a point.
+
+Each of these has been changed in a save that then loaded in the game (build `4.1.1.7631656`)
+with the new value. Inventory, approval and the mod list come next.
+
+Saves from before Patch 8 are listed but can't be edited.
 
 - [SCOPE.md](SCOPE.md): what the editor will and won't do, the build order and where it stands.
 - [docs/FORMAT.md](docs/FORMAT.md): what is known about the save format.
+
+## Getting it
+
+The app is built for Windows and Linux whenever `main` changes. On the repository's **Actions**
+page, open the latest **CI** run and download `nautiloid-save-editor-windows-x64` or
+`nautiloid-save-editor-linux-x64` from its artifacts.
+
+- **Windows:** unzip and run `nautiloid-save-editor.exe`. The app isn't signed, so Windows may
+  show "Windows protected your PC" the first time; choose **More info**, then **Run anyway**.
+- **Linux and Steam Deck:** unpack the archive and run `nautiloid-save-editor`. It needs a
+  desktop with OpenGL and `libxkbcommon-x11`, which desktop systems have.
+- **macOS:** built only for version tags, or when the CI workflow is run by hand with the macOS
+  box ticked. That build has not been run on a Mac yet.
+
+Or build it from source with [Rust](https://rustup.rs) 1.88 or later:
+
+```bash
+cargo run --release
+```
+
+## Using it
+
+1. Start the app. It looks for the game's saves folder and lists the saves by campaign. If it
+   doesn't find the folder, choose it, or drop a save's folder onto the window.
+2. Open a save and change what you want. Every change is listed in the Changes panel, where
+   each can be reverted on its own. Undo and redo work as usual.
+3. Choose **Export as a new save**, and give the save a name. It is written beside the
+   original, and the game lists it under that name in **Load Game**.
+
+![The save browser](docs/images/browser.png)
+
+The game keeps its saves here:
+
+| System | Folder |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\Larian Studios\Baldur's Gate 3\PlayerProfiles\Public\Savegames\Story` |
+| macOS | `~/Documents/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/Savegames/Story` |
+| Linux, Steam Deck | the same path as Windows, inside the game's Proton prefix (`steamapps/compatdata/1086940`) |
 
 ## Looking inside a save
 
@@ -24,6 +83,9 @@ Run it without arguments for the other commands: `list`, `dump`, `find`, `diff`,
 ```bash
 cargo test
 ```
+
+The interface is tested without a window: the tests click through the app and draw each screen
+to `target/ui-snapshots/`.
 
 Real saves are private and are not in the repository. To run the checks against your own, point
 `NAUTILOID_SAVES` at a folder of save folders:

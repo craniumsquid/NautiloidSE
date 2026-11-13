@@ -34,16 +34,20 @@ Built, and its output loads in the game (see Status).
 - A command-line tool that lists, dumps, searches and compares saves, so that two saves taken
   before and after one known change in the game can be compared to locate a field.
 
-### Phase 1: browser and read-only inspector
+### Phase 1: the app, its save browser and the Save info tab
 
-- Save browser grouped by campaign, with thumbnails, game version, party and a "modded" marker.
-- Application shell: header, sidebar, notices, dialogs, Changes panel, undo and redo.
-- Save info tab, and read-only views of the party and inventories.
+Built (see Status).
+
+- Save browser grouped by campaign, with thumbnails, game version, party and a count of mods.
+- Application shell: header, sidebar, notices, dialogs, Changes panel, undo and redo, and the
+  export of a new save.
+- Save info tab. The read-only view of inventories planned for this phase is left to the
+  Inventory step below, where their tables have to be worked out anyway.
 
 ### Phase 2: edits, in this order
 
-1. **Party.** Per character: experience, level-ups, ability scores and gold. Party-wide:
-   Inspiration.
+1. **Party.** Built. Per character: experience, level-ups, ability scores and gold.
+   Party-wide: Inspiration.
    - A level-up is granted, not applied: the editor entitles the character to the next level
      and the game takes the player through the choices.
    - Ability scores are changed through the points allocated to each ability; the game adds
@@ -77,6 +81,21 @@ Built, and its output loads in the game (see Status).
 - Console saves.
 
 ## Status
+
+Phase 1 and the Party tab are built. The app lists saves by campaign, opens a Patch 8 save,
+changes the party's values with every change listed and revertible, and exports a new save
+beside the original.
+
+- The app's export, given the same changes, writes a save byte for byte the same as one made
+  by the command-line tool that loaded in the game with every change in place (experience, a
+  level-up, gold and Inspiration together).
+- The interface is tested without a window: tests click through the app, check what it does
+  and draw each screen. The app has also been run on a virtual Linux display against the
+  sample saves. It has not yet been run on Windows or macOS, or by anyone but its tests.
+- Builds for Windows and Linux are made by CI for `main`; macOS for version tags and on
+  request.
+
+Next is the Inventory tab.
 
 Phase 0 is built and passes on all eleven sample saves:
 
