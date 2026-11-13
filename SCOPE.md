@@ -68,8 +68,10 @@ Built (see Status).
 ### Stretch goal
 
 - **Difficulty.** Converting an Honour Mode save to Custom or Balanced, and rescuing a failed
-  Honour run. None of the sample saves is an Honour Mode save, so this needs one before it can
-  start.
+  Honour run. One sample is an Honour Mode save, at the start of a game. Until this is built,
+  an Honour Mode save opens and exports like any other, but the game keeps a single save for
+  such a playthrough and a second one beside it hasn't been tried, which the export dialog
+  says.
 
 ## Out of scope
 

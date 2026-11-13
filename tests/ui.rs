@@ -40,6 +40,29 @@ fn opens_a_save_and_shows_the_party() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[test]
+fn exporting_an_honour_mode_save_says_it_is_untried() {
+    let dir = temp_dir("honour");
+    sample_saves(&dir);
+    let mut ui = Harness::new(Some(dir.clone()), WINDOW);
+    ui.click("Gale");
+    ui.click("HonourMode");
+    assert!(ui.app.session().is_some());
+    ui.click("Export as a new save…");
+    assert!(ui.sees("This is an Honour Mode save."));
+    ui.snapshot("11-export-honour");
+    ui.click("Cancel");
+
+    // An ordinary save gets no such note.
+    ui.click("⬅  All saves");
+    ui.click("Tav");
+    ui.click("Shattered Sanctum - 8h 02m");
+    ui.click("Export as a new save…");
+    assert!(ui.sees("Export as a new save"));
+    assert!(!ui.sees("This is an Honour Mode save."));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Opens the newest sample save.
 fn open_sample(tag: &str) -> (std::path::PathBuf, Harness) {
     let dir = temp_dir(tag);

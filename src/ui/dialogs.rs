@@ -150,6 +150,15 @@ fn export(
             .color(theme::MUTED),
         );
     }
+    if session.is_some_and(|s| s.summary().honour_mode) {
+        ui.label(
+            egui::RichText::new(
+                "⚠ This is an Honour Mode save. The game keeps a single save for an Honour \
+                 Mode playthrough, and a second one beside it hasn't been tried in the game.",
+            )
+            .color(theme::ACCENT),
+        );
+    }
     let problem = name_problem(name);
     if let Some(text) = problem.map(str::to_owned).or_else(|| error.clone()) {
         ui.label(egui::RichText::new(text).color(theme::CORAL));
