@@ -315,17 +315,24 @@ pub fn mods(meta: &Lsf) -> Result<Vec<ModEntry>> {
 /// Tables and field offsets in the entity data. Each was found by matching known values
 /// (the party's level and experience from `SaveInfo.json`) across the sample saves.
 pub mod fields {
-    /// Rows of 12 bytes. The first two u32 both hold the character's total experience.
+    /// Rows of 12 bytes. The first two u32 both hold the character's total experience. A
+    /// change to both sticks; the game shows it as experience into the current level.
     pub const EXPERIENCE: &str = "game.experience.v0.ExperienceComponent";
     pub const EXPERIENCE_TOTAL: [usize; 2] = [0, 4];
     /// Rows of 4 bytes: the character level.
     pub const LEVEL: &str = "game.stats.v0.LevelComponent";
     /// Rows of 36 bytes. Strength, Dexterity, Constitution, Intelligence, Wisdom and Charisma
-    /// are six u32 starting at offset 8.
+    /// are six u32 starting at offset 8. These are totals; the game recalculates them on
+    /// load, so they can be read but a change to them is discarded.
     pub const STATS: &str = "game.stats.v3.StatsComponent";
     pub const STATS_ABILITIES: usize = 8;
-    /// One row of 4 bytes: the camp supplies total.
+    /// One row of 4 bytes: the camp supplies total. The game recalculates it on load.
     pub const CAMP_SUPPLIES: &str = "game.camp.v0.TotalSuppliesComponent";
+    /// Rows of 88 bytes. At offset 72 is a pair of offsets to seven u32: the points put into
+    /// each ability at character creation, above the base of 8. Index 1 is Strength and
+    /// index 6 Charisma. The game works the ability scores out from these on load.
+    pub const CREATION_STATS: &str = "game.character_creation.v1.CharacterCreationStatsComponent";
+    pub const CREATION_ABILITIES: usize = 72;
 }
 
 /// A party member as the entity data in `Globals.lsf` describes them.

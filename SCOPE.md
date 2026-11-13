@@ -89,6 +89,8 @@ Tried in the game so far:
 - An edit with a correct checksum loads. A change to experience sticks. Changes to an ability
   score total and to the camp supplies total are discarded: the game recalculates both on
   load, so those edits have to be made to whatever they are calculated from.
+- Ability scores are calculated from the points allocated at character creation, and a change
+  to those sticks.
 - The load menu lists a save under its folder's name, so an export can be a new folder beside
   the original, as planned. The files inside have to be named after it, or the copy hangs on
   loading.

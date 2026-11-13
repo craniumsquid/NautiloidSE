@@ -39,6 +39,7 @@ A <save> is a .lsv file or the save folder that holds one.
       fields of its entity data changed. ENTITY is the owner's identifier and OFFSET the
       field's position in the row, as the rows command shows them. With @INDEX, the row
       holds a pair of offsets at OFFSET and the change is to that array's INDEX-th value.
+      #N in place of ENTITY picks the table's N-th row, for tables no entity owns.
   check <save>...
       Read each save, write it back in memory and compare.
   extract <save> <file> <out>
@@ -692,9 +693,17 @@ fn compare_entities(a: &NewAge, b: &NewAge, limit: usize, out: &mut impl Write) 
 }
 
 /// One `TABLE:ENTITY:OFFSET=VALUE` from the set command.
+/// Whose row a change is to.
+enum Target {
+    /// The row that belongs to this entity.
+    Entity(value::Uuid),
+    /// The row at this position in the table, written `#N`.
+    Row(usize),
+}
+
 struct FieldChange {
     table: String,
-    entity: value::Uuid,
+    target: Target,
     offset: usize,
     /// With `OFFSET@INDEX`: which value of the array the row points at from `offset`.
     index: Option<usize>,
@@ -702,39 +711,65 @@ struct FieldChange {
 }
 
 impl FieldChange {
-    fn get(&self, entities: &NewAge, entity: u32) -> Result<u32> {
-        match self.index {
-            None => entities.get_u32(&self.table, entity, self.offset),
-            Some(index) => entities
-                .get_array_u32(&self.table, entity, self.offset)?
+    fn entity(&self, entities: &NewAge, id: value::Uuid) -> Result<u32> {
+        entities
+            .entity_index(id)
+            .ok_or_else(|| anyhow!("no entity {id} in the entity data"))
+    }
+
+    fn get(&self, entities: &NewAge) -> Result<u32> {
+        match (&self.target, self.index) {
+            (Target::Row(row), None) => entities.get_row_u32(&self.table, *row, self.offset),
+            (Target::Entity(id), None) => {
+                entities.get_u32(&self.table, self.entity(entities, *id)?, self.offset)
+            }
+            (Target::Entity(id), Some(index)) => entities
+                .get_array_u32(&self.table, self.entity(entities, *id)?, self.offset)?
                 .get(index)
                 .copied()
                 .ok_or_else(|| anyhow!("{}: no value {index} in the array", self.table)),
+            (Target::Row(_), Some(_)) => bail!("@INDEX needs an entity, not a row number"),
         }
     }
 
-    fn apply(&self, entities: &mut NewAge, entity: u32) -> Result<()> {
-        match self.index {
-            None => entities.set_u32(&self.table, entity, self.offset, self.value),
-            Some(index) => {
+    fn apply(&self, entities: &mut NewAge) -> Result<()> {
+        match (&self.target, self.index) {
+            (Target::Row(row), None) => {
+                entities.set_row_u32(&self.table, *row, self.offset, self.value)
+            }
+            (Target::Entity(id), None) => {
+                let entity = self.entity(entities, *id)?;
+                entities.set_u32(&self.table, entity, self.offset, self.value)
+            }
+            (Target::Entity(id), Some(index)) => {
+                let entity = self.entity(entities, *id)?;
                 entities.set_array_u32(&self.table, entity, self.offset, index, self.value)
             }
+            (Target::Row(_), Some(_)) => bail!("@INDEX needs an entity, not a row number"),
         }
     }
 
     fn place(&self) -> String {
+        let whose = match &self.target {
+            Target::Entity(id) => format!("of {id}"),
+            Target::Row(row) => format!("row {row}"),
+        };
         match self.index {
-            None => format!("at {}", self.offset),
-            Some(index) => format!("value {index} of the array at {}", self.offset),
+            None => format!("{whose} at {}", self.offset),
+            Some(index) => format!("{whose} value {index} of the array at {}", self.offset),
         }
     }
 }
 
 fn parse_field_change(text: &str) -> Result<FieldChange> {
-    let usage = || anyhow!("--u32 takes TABLE:ENTITY:OFFSET[@INDEX]=VALUE, not {text}");
+    let usage = || {
+        anyhow!(
+            "--u32 takes TABLE:ENTITY:OFFSET[@INDEX]=VALUE or TABLE:#ROW:OFFSET=VALUE, not {text}"
+        )
+    };
     let (target, value) = text.split_once('=').ok_or_else(usage)?;
     let mut parts = target.split(':');
-    let (Some(table), Some(entity), Some(offset), None) =
+    let (Some(table), Some(whose), Some(offset), None) =
         (parts.next(), parts.next(), parts.next(), parts.next())
     else {
         return Err(usage());
@@ -743,10 +778,16 @@ fn parse_field_change(text: &str) -> Result<FieldChange> {
         Some((offset, index)) => (offset, Some(index)),
         None => (offset, None),
     };
+    let target = match whose.strip_prefix('#') {
+        Some(row) => Target::Row(row.parse().with_context(|| format!("row {row}"))?),
+        None => Target::Entity(
+            value::Uuid::parse(whose)
+                .ok_or_else(|| anyhow!("{whose} is not an entity identifier"))?,
+        ),
+    };
     Ok(FieldChange {
         table: table.to_owned(),
-        entity: value::Uuid::parse(entity)
-            .ok_or_else(|| anyhow!("{entity} is not an entity identifier"))?,
+        target,
         offset: offset.parse().with_context(|| format!("offset {offset}"))?,
         index: index
             .map(|i| i.parse().with_context(|| format!("index {i}")))
@@ -775,15 +816,11 @@ fn set(args: &Args, out: &mut impl Write) -> Result<()> {
     let mut entities = NewAge::from_lsf(&document)?;
     let mut report = Vec::new();
     for change in &changes {
-        let index = entities
-            .entity_index(change.entity)
-            .ok_or_else(|| anyhow!("no entity {} in {file}", change.entity))?;
-        let before = change.get(&entities, index)?;
-        change.apply(&mut entities, index)?;
+        let before = change.get(&entities)?;
+        change.apply(&mut entities)?;
         report.push(format!(
-            "  {} of {} {}: {before} -> {}",
+            "  {} {}: {before} -> {}",
             change.table,
-            change.entity,
             change.place(),
             change.value
         ));
@@ -803,11 +840,8 @@ fn set(args: &Args, out: &mut impl Write) -> Result<()> {
     let written = Save::open(&folder)?;
     let after = NewAge::from_lsf(&written.lsf(file)?)?;
     for change in &changes {
-        let index = after
-            .entity_index(change.entity)
-            .ok_or_else(|| anyhow!("entity {} is gone", change.entity))?;
         ensure!(
-            change.get(&after, index)? == change.value,
+            change.get(&after)? == change.value,
             "{}: the edit did not survive the write",
             change.table
         );

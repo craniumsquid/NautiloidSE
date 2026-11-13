@@ -439,6 +439,25 @@ impl NewAge {
         Ok(())
     }
 
+    /// Reads a u32 from row `row` of table `name`, whoever owns it.
+    pub fn get_row_u32(&self, name: &str, row: usize, offset: usize) -> Result<u32> {
+        let (id, table) = self.table_ref(name)?;
+        ensure!(row < table.rows, "{name} has {} rows", table.rows);
+        ensure!(offset + 4 <= table.row_len, "{name}: no field at {offset}");
+        Ok(u32_at(self.row(id, row), offset))
+    }
+
+    /// Overwrites a u32 in row `row` of table `name`, whoever owns it. For tables whose rows
+    /// belong to no entity and are reached from other rows.
+    pub fn set_row_u32(&mut self, name: &str, row: usize, offset: usize, value: u32) -> Result<()> {
+        let (_, table) = self.table_ref(name)?;
+        ensure!(row < table.rows, "{name} has {} rows", table.rows);
+        ensure!(offset + 4 <= table.row_len, "{name}: no field at {offset}");
+        let at = table.start + row * table.row_len + offset;
+        self.bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        Ok(())
+    }
+
     /// Where the array is that a row points at. Many rows hold a pair of offsets, begin and
     /// end, to data elsewhere in the blob; `offset` is where that pair sits in the row.
     fn pointed_array(
@@ -703,6 +722,20 @@ mod tests {
         assert_eq!(
             NewAge::parse(original.clone()).unwrap().to_bytes(),
             original
+        );
+
+        // The same field by row number.
+        let mut by_row = NewAge::parse(original.clone()).unwrap();
+        assert_eq!(by_row.get_row_u32(EXPERIENCE, 1, 0).unwrap(), 5595);
+        by_row.set_row_u32(EXPERIENCE, 1, 0, 9000).unwrap();
+        assert_eq!(by_row.to_bytes(), blob.to_bytes());
+        assert!(
+            by_row.set_row_u32(EXPERIENCE, 2, 0, 1).is_err(),
+            "no such row"
+        );
+        assert!(
+            by_row.get_row_u32(EXPERIENCE, 0, 12).is_err(),
+            "past the row"
         );
 
         assert!(
