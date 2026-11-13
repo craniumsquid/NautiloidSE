@@ -279,7 +279,7 @@ impl EditorApp {
                             return;
                         };
                         ui.add_space(18.0);
-                        if widgets::button(ui, "←  All saves", Kind::Quiet).clicked() {
+                        if widgets::button(ui, "⬅  All saves", Kind::Quiet).clicked() {
                             actions.push(Action::Back);
                         }
                         ui.add_space(4.0);
@@ -366,7 +366,7 @@ impl EditorApp {
                     if changes > 0 {
                         ui.label(
                             egui::RichText::new(format!(
-                                "●  {changes} change{} not exported",
+                                "•  {changes} change{} not exported",
                                 if changes == 1 { "" } else { "s" }
                             ))
                             .font(theme::semibold(13.0))

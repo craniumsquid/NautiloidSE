@@ -199,7 +199,10 @@ pub fn stepper(
         .inner_margin(Margin::same(2.0))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            ui.horizontal(|ui| {
+            // Always minus, number, plus, whichever way the row around it runs, and no
+            // wider than those three.
+            let size = Vec2::new(28.0 + 2.0 + width + 2.0 + 28.0, 28.0);
+            ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
                 let step_button = |ui: &mut Ui, symbol: &str, enabled: bool| {
                     let (rect, response) =
                         ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());

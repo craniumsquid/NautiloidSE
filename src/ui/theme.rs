@@ -138,6 +138,8 @@ pub fn apply(ctx: &Context) {
     style.spacing.interact_size.y = 34.0;
     style.spacing.scroll.bar_width = 8.0;
     style.spacing.scroll.floating = false;
+    // The handle in the widget colours, not the text colour.
+    style.spacing.scroll.foreground_color = false;
 
     let mut visuals = Visuals::dark();
     visuals.override_text_color = Some(TEXT);

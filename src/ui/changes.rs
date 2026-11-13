@@ -84,7 +84,7 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
                                                 egui::RichText::new(number(&change.before))
                                                     .color(theme::MUTED),
                                             );
-                                            ui.label(egui::RichText::new("→").color(theme::MUTED));
+                                            ui.label(egui::RichText::new("➡").color(theme::MUTED));
                                             ui.label(
                                                 egui::RichText::new(number(&change.after))
                                                     .font(theme::semibold(15.0))

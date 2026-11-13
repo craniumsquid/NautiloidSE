@@ -229,6 +229,18 @@ impl Harness {
         self.click_at(rect.center());
     }
 
+    /// Turns the mouse wheel over `pos` by `points` (negative scrolls down).
+    pub fn scroll(&mut self, pos: Pos2, points: f32) {
+        self.events.push(Event::PointerMoved(pos));
+        self.frame();
+        self.events.push(Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, points),
+            modifiers: Modifiers::NONE,
+        });
+        self.settle();
+    }
+
     pub fn press(&mut self, key: Key, modifiers: Modifiers) {
         for pressed in [true, false] {
             self.events.push(Event::Key {

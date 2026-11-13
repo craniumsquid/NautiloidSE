@@ -207,21 +207,23 @@ fn character_card(ui: &mut Ui, session: &Session, index: usize, actions: &mut Ve
                         ui.set_min_height(36.0);
                         ui.label(egui::RichText::new(*name).font(theme::medium(15.0)));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(64.0, 30.0),
-                                Layout::right_to_left(Align::Center),
-                                |ui| {
-                                    ui.label(
-                                        egui::RichText::new(total.max(0).to_string())
-                                            .font(theme::bold(17.0))
-                                            .color(if moved { theme::GOLD } else { theme::TEXT }),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new("score")
-                                            .font(theme::body(12.0))
-                                            .color(theme::MUTED),
-                                    );
-                                },
+                            // A fixed column for the score, so the steppers line up
+                            // whether it has one digit or two.
+                            let (cell, _) = ui
+                                .allocate_exact_size(egui::vec2(72.0, 30.0), egui::Sense::hover());
+                            ui.painter().text(
+                                egui::pos2(cell.right(), cell.center().y),
+                                egui::Align2::RIGHT_CENTER,
+                                total.max(0).to_string(),
+                                theme::bold(17.0),
+                                if moved { theme::GOLD } else { theme::TEXT },
+                            );
+                            ui.painter().text(
+                                egui::pos2(cell.right() - 28.0, cell.center().y + 1.0),
+                                egui::Align2::RIGHT_CENTER,
+                                "score",
+                                theme::body(12.0),
+                                theme::MUTED,
                             );
                             field_stepper(
                                 ui,
@@ -257,15 +259,16 @@ fn character_card(ui: &mut Ui, session: &Session, index: usize, actions: &mut Ve
                 .color(theme::MUTED),
             );
         }
+        let loose = character.gold.iter().filter(|g| !g.in_container).count();
         for (stack, gold) in character.gold.iter().enumerate() {
             let label = if gold.in_container {
-                "In a bag or container"
-            } else if character.gold.len() > 1 {
-                "Carried (a separate stack)"
+                "In a bag or container".to_owned()
+            } else if loose > 1 {
+                format!("Carried (stack {})", stack + 1)
             } else {
-                "Carried"
+                "Carried".to_owned()
             };
-            widgets::row(ui, label, None, |ui| {
+            widgets::row(ui, &label, None, |ui| {
                 field_stepper(ui, session, Field::Gold(index, stack), 100, 96.0, actions);
             });
         }

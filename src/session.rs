@@ -297,7 +297,8 @@ impl Session {
             ),
             Field::Gold(c, stack) => {
                 let character = self.original.characters.get(c);
-                let several = character.is_some_and(|c| c.gold.len() > 1);
+                let several = character
+                    .is_some_and(|c| c.gold.iter().filter(|g| !g.in_container).count() > 1);
                 let bagged = character
                     .and_then(|c| c.gold.get(stack))
                     .is_some_and(|g| g.in_container);

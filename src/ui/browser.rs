@@ -381,6 +381,7 @@ fn save_grid(
             ui.add(
                 egui::TextEdit::singleline(&mut state.search)
                     .hint_text("Search saves")
+                    .margin(Margin::symmetric(10.0, 7.0))
                     .desired_width(220.0),
             );
         });
