@@ -439,6 +439,58 @@ impl NewAge {
         Ok(())
     }
 
+    /// Where the array is that a row points at. Many rows hold a pair of offsets, begin and
+    /// end, to data elsewhere in the blob; `offset` is where that pair sits in the row.
+    fn pointed_array(
+        &self,
+        name: &str,
+        entity: u32,
+        offset: usize,
+    ) -> Result<std::ops::Range<usize>> {
+        let (id, table) = self.table_ref(name)?;
+        ensure!(
+            offset + 16 <= table.row_len,
+            "{name}: no pair of offsets at {offset}"
+        );
+        let row = self
+            .row_of(id, entity)
+            .ok_or_else(|| anyhow!("{name}: the entity has no row"))?;
+        let row = self.row(id, row);
+        let (begin, end) = (u64_at(row, offset), u64_at(row, offset + 8));
+        ensure!(
+            begin <= end && end <= u64_at(&self.bytes, 16) && (end - begin).is_multiple_of(4),
+            "{name}: the field at {offset} is not a pair of offsets to 32-bit values"
+        );
+        Ok(HEADER_LEN + begin as usize..HEADER_LEN + end as usize)
+    }
+
+    /// The u32 values in the array that the row of table `name` belonging to `entity`
+    /// points at with the pair of offsets at `offset`.
+    pub fn get_array_u32(&self, name: &str, entity: u32, offset: usize) -> Result<Vec<u32>> {
+        let range = self.pointed_array(name, entity, offset)?;
+        Ok(range.step_by(4).map(|at| u32_at(&self.bytes, at)).collect())
+    }
+
+    /// Overwrites the u32 at `index` of that array.
+    pub fn set_array_u32(
+        &mut self,
+        name: &str,
+        entity: u32,
+        offset: usize,
+        index: usize,
+        value: u32,
+    ) -> Result<()> {
+        let range = self.pointed_array(name, entity, offset)?;
+        ensure!(
+            index < range.len() / 4,
+            "{name}: the array at {offset} has {} values",
+            range.len() / 4
+        );
+        let at = range.start + index * 4;
+        self.bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        Ok(())
+    }
+
     /// Writes the blob back into the document it came from, with its checksum up to date.
     pub fn store(&self, lsf: &mut Lsf) -> Result<()> {
         let attr =
@@ -659,6 +711,53 @@ mod tests {
         );
         assert!(blob.set_u32(EXPERIENCE, 1, 10, 1).is_err(), "past the row");
         assert!(blob.set_u32("game.missing.v0.Component", 1, 0, 1).is_err());
+    }
+
+    #[test]
+    fn follows_a_row_to_the_array_it_points_at() {
+        const POINTERS: &str = "game.test.v0.PointerComponent";
+        let blob = build::blob(
+            &[[1; 16], [2; 16]],
+            &[
+                TableSpec {
+                    name: "game.test.v0.Values",
+                    row_len: 4,
+                    rows: vec![vec![7, 0, 0, 0], vec![5, 0, 0, 0], vec![6, 0, 0, 0]],
+                    owners: None,
+                },
+                TableSpec {
+                    name: POINTERS,
+                    row_len: 24,
+                    rows: vec![vec![0; 24]],
+                    owners: Some(vec![1]),
+                },
+            ],
+        );
+        // Point the row's second and third words at the three values, as the game's rows
+        // point at their arrays: offsets from the start of the data section.
+        let mut blob = NewAge::parse(blob).unwrap();
+        let values = blob.table("game.test.v0.Values").unwrap();
+        let begin = (blob.row_offset(values, 0) - 48) as u32;
+        blob.set_u32(POINTERS, 1, 8, begin).unwrap();
+        blob.set_u32(POINTERS, 1, 16, begin + 12).unwrap();
+        let mut blob = NewAge::parse(blob.to_bytes()).unwrap();
+
+        assert_eq!(blob.get_array_u32(POINTERS, 1, 8).unwrap(), [7, 5, 6]);
+        blob.set_array_u32(POINTERS, 1, 8, 1, 9).unwrap();
+        assert_eq!(blob.get_array_u32(POINTERS, 1, 8).unwrap(), [7, 9, 6]);
+        assert_eq!(blob.row(values, 1), [9, 0, 0, 0]);
+        assert!(
+            blob.set_array_u32(POINTERS, 1, 8, 3, 1).is_err(),
+            "past the end"
+        );
+        assert!(
+            blob.get_array_u32(POINTERS, 1, 16).is_err(),
+            "no room for a pair"
+        );
+        // Words that are not a begin and end are refused: here the end comes first.
+        blob.set_u32(POINTERS, 1, 0, begin + 100).unwrap();
+        assert!(blob.get_array_u32(POINTERS, 1, 0).is_err());
+        NewAge::parse(blob.to_bytes()).unwrap();
     }
 
     #[test]

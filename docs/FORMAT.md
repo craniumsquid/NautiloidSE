@@ -131,10 +131,17 @@ every Patch 8 sample:
 
 | Table | Row | What |
 | --- | --- | --- |
-| `game.experience.v0.ExperienceComponent` | 12 bytes | Total experience, twice: u32 at 0 and at 4. Only party members have a row |
+| `game.experience.v0.ExperienceComponent` | 12 bytes | Total experience, twice: u32 at 0 and at 4. Only party members have a row. **Editable**: the game takes the new total, and shows it as experience into the current level |
 | `game.stats.v0.LevelComponent` | 4 bytes | Character level |
-| `game.stats.v3.StatsComponent` | 36 bytes | Strength to Charisma as six u32 from offset 8. Whether these are base scores or totals with bonuses is not known |
-| `game.camp.v0.TotalSuppliesComponent` | 4 bytes | Camp supplies total. One row |
+| `game.stats.v3.StatsComponent` | 36 bytes | Strength to Charisma as six u32 from offset 8. These are totals with every bonus applied (an item that sets a score shows here). **Recalculated on load**: a change here is discarded |
+| `game.camp.v0.TotalSuppliesComponent` | 4 bytes | Camp supplies total. One row. **Recalculated on load**: a change here is discarded |
+| `game.character_creation.v1.CharacterCreationStatsComponent` | 88 bytes | Race and subrace identifiers, the character's name (offset and length at 56 and 64), and at 72 a pair of offsets to seven u32: the points put into each ability above the base of 8, with Strength at index 1. Party members and other recruited characters have a row. Whether the game derives ability scores from it is not known |
+| `game.action_resources.v1.Component` | 16 bytes | A pair of offsets to 64-byte entries: a resource identifier, a level, then the amount and the maximum as 64-bit floats. Action points, movement, spell slots and class resources appear here. Nothing in it looks like Inspiration |
+
+Many rows hold a pair of offsets like these, begin and end, to an array elsewhere in the data
+section. The level-up tables (`game.character_creation.v3.LevelUpComponent` and
+`game.progression.v3.LevelUpComponent`) point at one `LevelUpComponentData` row per level
+gained, each with identifiers for the class, subclass and feat taken.
 
 Tables that look like the remaining Phase 2 targets, not yet decoded:
 
@@ -142,10 +149,9 @@ Tables that look like the remaining Phase 2 targets, not yet decoded:
   row points at.
 - `game.inventory.v0.Stack`, `StackEntry`, `NewStackComponent`, `StackMemberComponent`,
   `ContainerComponent`, `ContainerSlotData`, `MemberComponent`: inventories and stacks.
-- `game.action_resources.v1.Component`: action resources, which may include Inspiration.
-- `game.stats.v0.ClassesComponent`, `game.progression.v3.LevelUpComponent`,
-  `game.character_creation.*`: class levels and level-up choices, which a level change may
-  have to agree with.
+- `game.stats.v0.ClassesComponent` and the selector tables under `game.character_creation.*`:
+  class levels and the choices made at each level-up, which a level change may have to agree
+  with.
 - `game.party.v0.MemberComponent`, `game.camp.v1.ChestComponent`, `game.v0.PlayerComponent`.
 
 ## Tried in the game
@@ -164,18 +170,27 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | One unused byte at the start of the data section changed | Fails |
 | One unused byte at the start of the directory changed | Fails |
 | One character's experience raised by one, checksum left as it was or set to zero | Fails |
+| Every party member's experience set to 6000, checksum recomputed | Loads. Each shows 2750, which is 6000 less the 3250 at which level 5 starts in that game |
+| One character's experience set to 7100, another's Strength total 18 → 20, camp supplies total 660 → 700, checksum recomputed | Loads. Experience shows 600; Strength is still 18 and camp supplies still 660 |
 
 Every failure looks the same: the save loads to 100%, drops to the title screen, and shows
 "Server shutting down". Other saves load normally afterwards.
 
 So the game accepts this code's LZ4 and Zstandard output, its package layout and its export
 folders, and it refuses any entity data whose checksum does not match. The checksum function
-above predicts each of these results.
+above predicts each of these results. With the checksum right, an edit loads; whether it
+sticks depends on whether the game keeps the value or works it out again from something else.
 
 ## Not yet known
 
-- **Whether an edit with a correct checksum loads and takes effect.** Nothing else is known
-  to stand in the way, but it has not been tried.
+- **What ability scores are worked out from.** The totals are recalculated on load. The only
+  other record of them found is the points allocated at character creation; a test of whether
+  changing those changes the totals is out.
+- **Where camp supplies and Inspiration are kept.** The supplies total is recalculated,
+  presumably from the food items themselves. Inspiration has not been found.
+- Whether experience past the next level's threshold makes the game offer the level-up. The
+  7100 test shows 600, which fits a level 6 threshold of 6500 in that modded game, but whether
+  a level-up was offered was not recorded.
 - Whether the game checks the package's MD5 or the per-mod MD5s on load.
 - Whether an exported copy should also get its own name inside the package, in
   `SaveInfo.json` and the screenshot entry. It loads without.

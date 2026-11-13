@@ -26,7 +26,7 @@ authorship carries over. Nautiloid is GPL-3.0-only.
 
 ### Phase 0: format engine (no interface)
 
-Built. One check in the game remains before Phase 2 (see Status).
+Built, and its output loads in the game (see Status).
 
 - Reader and writer for the save package (`.lsv`) and the Larian binary files inside it (`.lsf`).
 - Reader for the entity data inside those files, where the party's numbers are kept.
@@ -86,8 +86,9 @@ Tried in the game so far:
 - A save with anything changed in the entity data does not load unless the checksum in that
   data's header is brought up to date. The function is known and built in: it reproduces the
   stored checksum of every sample and predicts all seven in-game results.
-- **Still to try: an edit with a correct checksum.** Phase 2 starts once one loads and shows
-  the new value.
+- An edit with a correct checksum loads. A change to experience sticks. Changes to an ability
+  score total and to the camp supplies total are discarded: the game recalculates both on
+  load, so those edits have to be made to whatever they are calculated from.
 - The load menu lists a save under its folder's name, so an export can be a new folder beside
   the original, as planned. The files inside have to be named after it, or the copy hangs on
   loading.
