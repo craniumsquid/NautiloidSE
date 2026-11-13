@@ -175,14 +175,15 @@ pub fn summarize(folder: &Path) -> Result<SaveSummary> {
         _ if name.starts_with("AutoSave") => SaveKind::Auto,
         _ => SaveKind::Manual,
     };
-    let game_version = match meta.find(&["MetaData", "MetaData", "GameVersions", "GameVersion"]) {
-        Some(node) => text(&meta, node, "Object"),
-        None => String::new(),
-    };
-    let game_version = if game_version.is_empty() {
-        info.game_version.clone()
+    // `GameVersions` lists every version the campaign has been played with, oldest first;
+    // the version that wrote this save is the last. `SaveInfo.json` names it directly.
+    let game_version = if info.game_version.is_empty() {
+        meta.find(&["MetaData", "MetaData", "GameVersions"])
+            .and_then(|list| meta.children_named(list, "GameVersion").last())
+            .map(|node| text(&meta, node, "Object"))
+            .unwrap_or_default()
     } else {
-        game_version
+        info.game_version.clone()
     };
     let (major, minor) = meta.header.engine_major_minor();
     let support = if (major, minor) == SUPPORTED_ENGINE {
