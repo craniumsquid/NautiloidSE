@@ -216,7 +216,7 @@ fn character_card(ui: &mut Ui, session: &Session, index: usize, actions: &mut Ve
                                 egui::Align2::RIGHT_CENTER,
                                 total.max(0).to_string(),
                                 theme::bold(17.0),
-                                if moved { theme::GOLD } else { theme::TEXT },
+                                if moved { theme::CHANGED } else { theme::TEXT },
                             );
                             ui.painter().text(
                                 egui::pos2(cell.right() - 28.0, cell.center().y + 1.0),

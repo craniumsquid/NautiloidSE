@@ -46,9 +46,9 @@ fn sized_button(ui: &mut Ui, text: &str, kind: Kind, size: Vec2, font: FontId) -
         let (fill, line, mut color) = match kind {
             Kind::Primary => (
                 if down || hot {
-                    theme::VIOLET_HOVER
+                    theme::ACCENT_HOVER
                 } else {
-                    theme::VIOLET
+                    theme::ACCENT
                 },
                 Color32::TRANSPARENT,
                 theme::ON_ACCENT,
@@ -62,7 +62,7 @@ fn sized_button(ui: &mut Ui, text: &str, kind: Kind, size: Vec2, font: FontId) -
                     theme::WIDGET
                 },
                 if hot {
-                    theme::VIOLET_LINE
+                    theme::ACCENT_LINE
                 } else {
                     theme::LINE_STRONG
                 },
@@ -146,7 +146,7 @@ pub fn section_title(ui: &mut Ui, text: &str) {
     ui.label(
         egui::RichText::new(text.to_uppercase())
             .font(theme::bold(12.5))
-            .color(theme::VIOLET)
+            .color(theme::ACCENT)
             .extra_letter_spacing(1.4),
     );
 }
@@ -188,7 +188,7 @@ pub fn stepper(
 ) -> Option<u32> {
     let mut result = None;
     let outline = if changed {
-        theme::GOLD_LINE
+        theme::CHANGED_LINE
     } else {
         theme::LINE_STRONG
     };
@@ -233,7 +233,7 @@ pub fn stepper(
                     result = Some(value.saturating_sub(step).max(*range.start()));
                 }
                 let mut edited = value;
-                let color = if changed { theme::GOLD } else { theme::TEXT };
+                let color = if changed { theme::CHANGED } else { theme::TEXT };
                 ui.scope(|ui| {
                     // The number sits in the frame, with no box of its own.
                     let visuals = ui.visuals_mut();
@@ -267,11 +267,18 @@ pub fn stepper(
     result
 }
 
+/// Width kept clear on the right of a [`row`] for its control: the widest stepper and its
+/// revert button.
+const CONTROL_ROOM: f32 = 216.0;
+
 /// A line with a label on the left and whatever `right` adds on the right.
 pub fn row(ui: &mut Ui, label: &str, hint: Option<&str>, right: impl FnOnce(&mut Ui)) {
     ui.horizontal(|ui| {
         ui.set_min_height(36.0);
+        // The words wrap in what the control on the right leaves them.
+        let room = (ui.available_width() - CONTROL_ROOM).max(120.0);
         ui.vertical(|ui| {
+            ui.set_max_width(room);
             ui.spacing_mut().item_spacing.y = 0.0;
             if hint.is_none() {
                 ui.add_space(8.0);
@@ -299,7 +306,7 @@ pub fn grouped(number: u64) -> String {
     let digits = number.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, digit) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(digit);

@@ -235,7 +235,7 @@ fn drop_zone(ui: &mut Ui, title: &str, detail: &str, hovering: bool, actions: &m
     let height = (ui.available_height() - 32.0).clamp(200.0, 320.0);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
     let (fill, line) = if hovering {
-        (theme::VIOLET_BG, theme::VIOLET)
+        (theme::ACCENT_BG, theme::ACCENT)
     } else {
         (theme::PANEL_ALT, theme::LINE_STRONG)
     };
@@ -294,7 +294,7 @@ fn campaign_list(ui: &mut Ui, state: &BrowserState, now: u64, actions: &mut Vec<
                 );
                 if ui.is_rect_visible(rect) {
                     let (fill, line) = if selected {
-                        (theme::VIOLET_BG, theme::VIOLET_LINE)
+                        (theme::ACCENT_BG, theme::ACCENT_LINE)
                     } else if response.hovered() {
                         (theme::WIDGET, theme::LINE_STRONG)
                     } else {
@@ -331,8 +331,8 @@ fn campaign_list(ui: &mut Ui, state: &BrowserState, now: u64, actions: &mut Vec<
                             ui,
                             Pos2::new(rect.right() - 74.0, rect.top() + 9.0),
                             "HONOUR",
-                            theme::GOLD,
-                            theme::GOLD_BG,
+                            theme::ACCENT,
+                            theme::ACCENT_BG,
                         );
                     }
                 }
@@ -424,7 +424,7 @@ fn save_grid(
 
 fn kind_colors(kind: SaveKind) -> (Color32, Color32) {
     match kind {
-        SaveKind::Honour => (theme::GOLD, Color32::from_black_alpha(215)),
+        SaveKind::Honour => (theme::ACCENT, Color32::from_black_alpha(215)),
         _ => (theme::TEXT, Color32::from_black_alpha(200)),
     }
 }
@@ -445,7 +445,7 @@ fn save_card(
     let hot = response.hovered();
     let rounding = Rounding::same(12.0);
     let line = if hot && editable {
-        theme::VIOLET_LINE
+        theme::ACCENT_LINE
     } else {
         theme::LINE
     };
@@ -564,7 +564,7 @@ fn save_card(
         theme::MUTED,
     );
     let (status, status_color) = match &summary.support {
-        Support::Editable => ("✔ Patch 8".to_owned(), theme::TEAL),
+        Support::Editable => ("✔ Patch 8".to_owned(), theme::FINE),
         Support::ReadOnly(_) => ("⚠ Can't be edited".to_owned(), theme::CORAL),
     };
     painter.text(

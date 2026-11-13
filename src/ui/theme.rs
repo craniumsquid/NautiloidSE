@@ -5,41 +5,47 @@ use eframe::egui::{
     TextStyle, Visuals,
 };
 
+// The palette is Faerûn by candlelight: dark leather and old wood for surfaces, parchment
+// for text, and gilt for anything that invites a click, as on the game's own menus.
+// Violet, the colour of the Weave and of the nautiloid, is kept for one thing only: marking
+// what has been changed.
+
 // Surfaces, darkest first.
-pub const SUNKEN: Color32 = Color32::from_rgb(10, 8, 15);
-pub const BG: Color32 = Color32::from_rgb(15, 12, 22);
-pub const BG_HEADER: Color32 = Color32::from_rgb(19, 15, 28);
-pub const BG_SIDEBAR: Color32 = Color32::from_rgb(17, 14, 25);
-pub const PANEL: Color32 = Color32::from_rgb(25, 21, 37);
-pub const PANEL_ALT: Color32 = Color32::from_rgb(21, 17, 31);
-pub const DIALOG: Color32 = Color32::from_rgb(27, 22, 40);
-pub const WIDGET: Color32 = Color32::from_rgb(38, 32, 56);
-pub const WIDGET_HOVER: Color32 = Color32::from_rgb(50, 42, 73);
-pub const WIDGET_PRESS: Color32 = Color32::from_rgb(62, 52, 90);
-pub const LINE: Color32 = Color32::from_rgb(43, 36, 62);
-pub const LINE_STRONG: Color32 = Color32::from_rgb(60, 51, 86);
+pub const SUNKEN: Color32 = Color32::from_rgb(11, 9, 7);
+pub const BG: Color32 = Color32::from_rgb(18, 15, 12);
+pub const BG_HEADER: Color32 = Color32::from_rgb(23, 19, 14);
+pub const BG_SIDEBAR: Color32 = Color32::from_rgb(21, 17, 13);
+pub const PANEL: Color32 = Color32::from_rgb(30, 25, 19);
+pub const PANEL_ALT: Color32 = Color32::from_rgb(25, 21, 16);
+pub const DIALOG: Color32 = Color32::from_rgb(34, 28, 21);
+pub const WIDGET: Color32 = Color32::from_rgb(47, 39, 29);
+pub const WIDGET_HOVER: Color32 = Color32::from_rgb(61, 51, 38);
+pub const WIDGET_PRESS: Color32 = Color32::from_rgb(75, 63, 46);
+pub const LINE: Color32 = Color32::from_rgb(52, 43, 31);
+pub const LINE_STRONG: Color32 = Color32::from_rgb(76, 63, 45);
 
-pub const TEXT: Color32 = Color32::from_rgb(236, 231, 245);
-pub const TEXT_SOFT: Color32 = Color32::from_rgb(205, 198, 220);
-pub const MUTED: Color32 = Color32::from_rgb(150, 141, 172);
+// Parchment.
+pub const TEXT: Color32 = Color32::from_rgb(240, 231, 212);
+pub const TEXT_SOFT: Color32 = Color32::from_rgb(215, 203, 180);
+pub const MUTED: Color32 = Color32::from_rgb(164, 151, 124);
 
-/// The accent: links, the selected tab, primary buttons.
-pub const VIOLET: Color32 = Color32::from_rgb(176, 140, 255);
-pub const VIOLET_HOVER: Color32 = Color32::from_rgb(198, 170, 255);
-pub const VIOLET_BG: Color32 = Color32::from_rgb(46, 34, 79);
-pub const VIOLET_LINE: Color32 = Color32::from_rgb(92, 70, 150);
+/// Gilt: headings, the selected tab, primary buttons.
+pub const ACCENT: Color32 = Color32::from_rgb(218, 182, 108);
+pub const ACCENT_HOVER: Color32 = Color32::from_rgb(237, 207, 140);
+pub const ACCENT_BG: Color32 = Color32::from_rgb(58, 46, 22);
+pub const ACCENT_LINE: Color32 = Color32::from_rgb(125, 101, 53);
 /// Anything changed and not yet exported.
-pub const GOLD: Color32 = Color32::from_rgb(232, 196, 108);
-pub const GOLD_BG: Color32 = Color32::from_rgb(44, 37, 24);
-pub const GOLD_LINE: Color32 = Color32::from_rgb(112, 93, 49);
-/// Warnings and things that cannot be done.
-pub const CORAL: Color32 = Color32::from_rgb(255, 150, 128);
-pub const CORAL_BG: Color32 = Color32::from_rgb(52, 26, 26);
-pub const CORAL_LINE: Color32 = Color32::from_rgb(120, 62, 56);
+pub const CHANGED: Color32 = Color32::from_rgb(190, 168, 255);
+pub const CHANGED_BG: Color32 = Color32::from_rgb(40, 33, 62);
+pub const CHANGED_LINE: Color32 = Color32::from_rgb(104, 87, 160);
+/// Warnings and things that cannot be done: sealing-wax red.
+pub const CORAL: Color32 = Color32::from_rgb(238, 132, 110);
+pub const CORAL_BG: Color32 = Color32::from_rgb(58, 27, 21);
+pub const CORAL_LINE: Color32 = Color32::from_rgb(124, 61, 49);
 /// Things that are fine.
-pub const TEAL: Color32 = Color32::from_rgb(110, 226, 196);
+pub const FINE: Color32 = Color32::from_rgb(146, 204, 150);
 /// Text on a filled accent button.
-pub const ON_ACCENT: Color32 = Color32::from_rgb(22, 14, 40);
+pub const ON_ACCENT: Color32 = Color32::from_rgb(31, 22, 8);
 
 /// A line of the given width. `Stroke::new` takes `impl Into<f32>`, and a bare float literal
 /// there relies on a type fallback the compiler is phasing out.
@@ -149,9 +155,9 @@ pub fn apply(ctx: &Context) {
     visuals.faint_bg_color = PANEL_ALT;
     visuals.window_rounding = Rounding::same(12.0);
     visuals.window_stroke = stroke(1.0, LINE_STRONG);
-    visuals.selection.bg_fill = VIOLET_BG;
-    visuals.selection.stroke = stroke(1.0, VIOLET);
-    visuals.hyperlink_color = VIOLET;
+    visuals.selection.bg_fill = ACCENT_BG;
+    visuals.selection.stroke = stroke(1.0, ACCENT);
+    visuals.hyperlink_color = ACCENT;
     let rounding = Rounding::same(8.0);
     let widgets = &mut visuals.widgets;
     widgets.noninteractive.bg_fill = PANEL;
@@ -160,9 +166,9 @@ pub fn apply(ctx: &Context) {
     widgets.noninteractive.rounding = rounding;
     for (state, fill, line) in [
         (&mut widgets.inactive, WIDGET, LINE_STRONG),
-        (&mut widgets.hovered, WIDGET_HOVER, VIOLET_LINE),
-        (&mut widgets.active, WIDGET_PRESS, VIOLET),
-        (&mut widgets.open, WIDGET_HOVER, VIOLET_LINE),
+        (&mut widgets.hovered, WIDGET_HOVER, ACCENT_LINE),
+        (&mut widgets.active, WIDGET_PRESS, ACCENT),
+        (&mut widgets.open, WIDGET_HOVER, ACCENT_LINE),
     ] {
         state.bg_fill = fill;
         state.weak_bg_fill = fill;

@@ -28,6 +28,9 @@ use thumbs::Thumbnails;
 use toast::{Toast, Toasts, Tone};
 use widgets::Kind;
 
+/// Below this width the Changes panel is hidden until asked for.
+const NARROW_WINDOW: f32 = 1180.0;
+
 /// What the app needs from the system it runs on.
 pub trait Platform {
     /// Asks the person to choose a folder. `None` if they cancel.
@@ -101,6 +104,8 @@ pub struct EditorApp {
     session: Option<Session>,
     tab: Tab,
     show_changes: bool,
+    /// Whether the window is too narrow to keep the Changes panel beside the content.
+    narrow: bool,
     dialog: Option<Dialog>,
     toasts: Toasts,
     thumbs: Thumbnails,
@@ -124,6 +129,7 @@ impl EditorApp {
             session: None,
             tab: Tab::Party,
             show_changes: true,
+            narrow: false,
             dialog: None,
             toasts: Toasts::default(),
             thumbs: Thumbnails::new(ctx),
@@ -191,6 +197,13 @@ impl EditorApp {
         }
         let modal = self.dialog.is_some();
         let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
+        // In a narrow window the Changes panel starts out of the way; the header button
+        // still brings it up. Widening the window puts it back.
+        let narrow = ctx.screen_rect().width() < NARROW_WINDOW;
+        if narrow != self.narrow {
+            self.narrow = narrow;
+            self.show_changes = !narrow;
+        }
 
         self.header(ctx, modal, &mut actions);
         if self.session.is_some() {
@@ -301,6 +314,13 @@ impl EditorApp {
                             );
                         });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            // The way out is in the Changes panel; when that is hidden it
+                            // is here.
+                            if !self.show_changes
+                                && widgets::button(ui, "Export…", Kind::Primary).clicked()
+                            {
+                                actions.push(Action::AskExport);
+                            }
                             let count = session.changes().len();
                             let label = if count == 0 {
                                 "Changes".to_owned()
@@ -370,7 +390,7 @@ impl EditorApp {
                                 if changes == 1 { "" } else { "s" }
                             ))
                             .font(theme::semibold(13.0))
-                            .color(theme::GOLD),
+                            .color(theme::CHANGED),
                         );
                     }
                     ui.label(
@@ -640,7 +660,7 @@ fn logo(ui: &mut Ui) {
         ui.label(
             egui::RichText::new("NAUTILOID")
                 .font(theme::display(22.0))
-                .color(theme::VIOLET)
+                .color(theme::ACCENT)
                 .extra_letter_spacing(2.0),
         );
         ui.label(
@@ -661,15 +681,15 @@ fn tab_button(ui: &mut Ui, label: &str, selected: bool, count: usize) -> egui::R
             ui.painter().rect(
                 rect,
                 Rounding::same(8.0),
-                theme::VIOLET_BG,
-                theme::stroke(1.0, theme::VIOLET_LINE),
+                theme::ACCENT_BG,
+                theme::stroke(1.0, theme::ACCENT_LINE),
             );
         } else if hot {
             ui.painter()
                 .rect_filled(rect, Rounding::same(8.0), theme::WIDGET);
         }
         let color = if selected {
-            theme::VIOLET_HOVER
+            theme::ACCENT_HOVER
         } else {
             theme::TEXT_SOFT
         };
@@ -686,7 +706,7 @@ fn tab_button(ui: &mut Ui, label: &str, selected: bool, count: usize) -> egui::R
                 Vec2::new(24.0, 20.0),
             );
             ui.painter()
-                .rect_filled(badge, Rounding::same(10.0), theme::GOLD);
+                .rect_filled(badge, Rounding::same(10.0), theme::CHANGED);
             ui.painter().text(
                 badge.center(),
                 Align2::CENTER_CENTER,

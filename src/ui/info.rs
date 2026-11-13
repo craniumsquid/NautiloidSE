@@ -6,13 +6,11 @@ use crate::saves;
 use crate::session::Session;
 use eframe::egui::{self, Ui};
 
+/// One line of the facts grid: what it is, then its value.
 fn fact(ui: &mut Ui, label: &str, value: &str) {
-    ui.horizontal_top(|ui| {
-        ui.allocate_ui(egui::vec2(150.0, 20.0), |ui| {
-            ui.label(egui::RichText::new(label).color(theme::MUTED));
-        });
-        ui.add(egui::Label::new(egui::RichText::new(value).color(theme::TEXT_SOFT)).wrap());
-    });
+    ui.label(egui::RichText::new(label).color(theme::MUTED));
+    ui.add(egui::Label::new(egui::RichText::new(value).color(theme::TEXT_SOFT)).wrap());
+    ui.end_row();
 }
 
 pub fn show(ui: &mut Ui, session: &Session, now: u64) {
@@ -24,26 +22,27 @@ pub fn show(ui: &mut Ui, session: &Session, now: u64) {
     widgets::card(ui, |ui| {
         ui.set_width(ui.available_width());
         widgets::section_title(ui, "The save");
-        fact(ui, "Name", &summary.name);
-        fact(ui, "Campaign", &summary.leader);
-        fact(ui, "Kind", summary.kind.label());
-        fact(
-            ui,
-            "Saved",
-            &saves::ago(now.saturating_sub(summary.saved_at)),
-        );
-        fact(ui, "Where", browser::level_name(&summary.level));
-        fact(ui, "Game version", &summary.game_version);
-        fact(
-            ui,
-            "Rules",
-            if summary.honour_mode {
-                "Honour Mode"
-            } else {
-                "Not Honour Mode"
-            },
-        );
-        fact(ui, "Folder", &summary.folder.display().to_string());
+        egui::Grid::new("facts")
+            .num_columns(2)
+            .min_col_width(120.0)
+            .min_row_height(22.0)
+            .spacing([20.0, 8.0])
+            .show(ui, |ui| {
+                let saved = saves::ago(now.saturating_sub(summary.saved_at));
+                let rules = if summary.honour_mode {
+                    "Honour Mode"
+                } else {
+                    "Not Honour Mode"
+                };
+                fact(ui, "Name", &summary.name);
+                fact(ui, "Campaign", &summary.leader);
+                fact(ui, "Kind", summary.kind.label());
+                fact(ui, "Saved", &saved);
+                fact(ui, "Where", browser::level_name(&summary.level));
+                fact(ui, "Game version", &summary.game_version);
+                fact(ui, "Rules", rules);
+                fact(ui, "Folder", &summary.folder.display().to_string());
+            });
     });
     ui.add_space(8.0);
 

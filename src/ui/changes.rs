@@ -20,7 +20,7 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
                 ui,
                 &changes.len().to_string(),
                 theme::ON_ACCENT,
-                theme::GOLD,
+                theme::CHANGED,
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if widgets::button(ui, "Revert all", Kind::Quiet).clicked() {
@@ -88,7 +88,7 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
                                             ui.label(
                                                 egui::RichText::new(number(&change.after))
                                                     .font(theme::semibold(15.0))
-                                                    .color(theme::GOLD),
+                                                    .color(theme::CHANGED),
                                             );
                                         });
                                     });

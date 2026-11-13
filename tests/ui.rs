@@ -140,7 +140,10 @@ fn exports_a_new_save_and_carries_on_from_it() {
     ui.snapshot("06-after-export");
 
     ui.click("Show in folder");
-    assert_eq!(ui.platform.borrow().revealed, [exported.clone()]);
+    assert_eq!(
+        ui.platform.borrow().revealed,
+        std::slice::from_ref(&exported)
+    );
     // The original is as it was.
     let original = Session::open(&dir.join("Tav-1234__Shattered Sanctum - 8h 02m")).unwrap();
     assert_eq!(original.value(Field::Experience(0)), Some(5595));
@@ -274,9 +277,16 @@ fn shows_save_info_and_fits_a_small_window() {
     assert!(ui.sees("Globals.lsf"));
 
     ui.click("Party");
+    // A small window hides the Changes panel and puts the way out in the header.
     ui.resize([980.0, 640.0]);
     assert!(ui.sees("Inspiration"));
+    assert!(!ui.sees("Nothing changed yet."));
+    assert!(ui.sees("Export…"));
     ui.snapshot("09-party-small-window");
+    ui.click("Changes");
+    assert!(ui.sees("Nothing changed yet."));
+    ui.snapshot("09b-changes-small-window");
+    ui.click("Changes");
     ui.click("⬅  All saves");
     ui.snapshot("10-browser-small-window");
     std::fs::remove_dir_all(&dir).unwrap();

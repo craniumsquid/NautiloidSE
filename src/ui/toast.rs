@@ -80,8 +80,8 @@ impl Toasts {
             .show(ctx, |ui| {
                 for (i, toast) in self.list.iter().enumerate() {
                     let (line, mark, mark_color) = match toast.tone {
-                        Tone::Info => (theme::LINE_STRONG, "•", theme::VIOLET),
-                        Tone::Success => (theme::LINE_STRONG, "✔", theme::TEAL),
+                        Tone::Info => (theme::LINE_STRONG, "•", theme::ACCENT),
+                        Tone::Success => (theme::LINE_STRONG, "✔", theme::FINE),
                         Tone::Problem => (theme::CORAL_LINE, "⚠", theme::CORAL),
                     };
                     Frame::none()
