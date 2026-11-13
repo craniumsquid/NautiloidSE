@@ -268,8 +268,10 @@ fn shows_save_info_and_fits_a_small_window() {
     assert!(ui.sees("Game version"));
     assert!(ui.sees("4.1.1.7631656"));
     assert!(ui.sees("MODS (12)"));
-    assert!(ui.sees("Globals.lsf"));
     ui.snapshot("04-save-info");
+    // The list of files is below the mods.
+    ui.scroll(egui::pos2(600.0, 500.0), -900.0);
+    assert!(ui.sees("Globals.lsf"));
 
     ui.click("Party");
     ui.resize([980.0, 640.0]);

@@ -428,7 +428,10 @@ impl EditorApp {
                         actions,
                     ),
                     Some(session) => {
+                        // Each tab keeps its own place, so a tab opens where it was left
+                        // and not where another was scrolled to.
                         egui::ScrollArea::vertical()
+                            .id_salt(self.tab.label())
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
                                 Frame::none()
