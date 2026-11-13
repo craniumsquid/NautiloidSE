@@ -7,6 +7,14 @@ license = "GPL-3.0-only"
 description = "Save editor for Baldur's Gate 3 (Patch 8)"
 readme = "README.md"
 
+[[bin]]
+name = "nautiloid-save-editor"
+path = "src/main.rs"
+
+[[bin]]
+name = "nautiloid-cli"
+path = "src/bin/nautiloid-cli.rs"
+
 [dependencies]
 anyhow = "1"
 # LZ4 block and frame: the sections inside .lsf files and the package file list.
@@ -17,6 +25,17 @@ zstd = "0.13"
 flate2 = "1"
 md-5 = "0.10"
 serde_json = "1"
+# The interface.
+eframe = "0.29"
+# The system's folder picker. On Linux it goes through the desktop portal, which needs no
+# GTK at build time.
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+# Decodes the .WebP screenshot beside each save.
+image = { version = "0.25", default-features = false, features = ["webp"] }
+
+[dev-dependencies]
+# Writes the pictures the interface tests take.
+image = { version = "0.25", default-features = false, features = ["webp", "png"] }
 
 [profile.release]
 lto = "thin"
