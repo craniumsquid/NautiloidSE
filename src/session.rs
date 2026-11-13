@@ -9,7 +9,7 @@
 use crate::lsf::Lsf;
 use crate::newage::NewAge;
 use crate::party::{self, Character, Party};
-use crate::save::{self, Save};
+use crate::save::{self, PartyMember, Save};
 use crate::saves::{self, SaveSummary};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use std::ops::RangeInclusive;
@@ -73,6 +73,48 @@ pub struct Session {
     redo: Vec<Step>,
     /// The field last edited and when, for merging quick repeated edits into one step.
     last_edit: Option<(Field, f64)>,
+    /// For each character, their entry in the save's own summary.
+    entries: Vec<Option<usize>>,
+    /// The characters in the order to show them.
+    order: Vec<usize>,
+}
+
+/// Finds each character's entry in the save's own summary, which is the only place the
+/// classes are written out and which lists the party in the game's order.
+///
+/// A companion is listed under their own name. Anyone else, a custom character above all, is
+/// told apart by level and experience, which the summary and the entity data agree on.
+fn summary_entries(members: &[PartyMember], characters: &[Character]) -> Vec<Option<usize>> {
+    // The summary writes Lae'zel as "Laezel".
+    let key = |name: &str| -> String {
+        name.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let mut entries = vec![None; characters.len()];
+    let mut taken = vec![false; members.len()];
+    let mut claim = |entries: &mut Vec<Option<usize>>,
+                     character: usize,
+                     fits: &dyn Fn(&PartyMember) -> bool| {
+        if let Some(member) = (0..members.len()).find(|&m| !taken[m] && fits(&members[m])) {
+            taken[member] = true;
+            entries[character] = Some(member);
+        }
+    };
+    for (index, character) in characters.iter().enumerate() {
+        if let Some(name) = character.companion() {
+            claim(&mut entries, index, &|m| key(&m.origin) == key(name));
+        }
+    }
+    for (index, character) in characters.iter().enumerate() {
+        if entries[index].is_none() {
+            claim(&mut entries, index, &|m| {
+                (m.level, m.experience_total) == (character.level, character.experience as u64)
+            });
+        }
+    }
+    entries
 }
 
 fn field_of(party: &Party, field: Field) -> Option<u32> {
@@ -122,6 +164,11 @@ impl Session {
             !original.characters.is_empty(),
             "the save has no party to edit"
         );
+        let entries = summary_entries(&summary.party, &original.characters);
+        // The summary's order is the game's: the main character first. Anyone it doesn't
+        // list comes after.
+        let mut order: Vec<usize> = (0..original.characters.len()).collect();
+        order.sort_by_key(|&c| entries[c].unwrap_or(usize::MAX));
         Ok(Session {
             summary,
             save,
@@ -132,6 +179,8 @@ impl Session {
             undo: Vec::new(),
             redo: Vec::new(),
             last_edit: None,
+            entries,
+            order,
         })
     }
 
@@ -141,6 +190,18 @@ impl Session {
 
     pub fn save(&self) -> &Save {
         &self.save
+    }
+
+    /// The characters in the order to show them: the game's own, the main character first.
+    /// Each is an index into the party's characters.
+    pub fn order(&self) -> &[usize] {
+        &self.order
+    }
+
+    /// What the save's own summary says of a character, if it lists them.
+    pub fn summary_of(&self, character: usize) -> Option<&PartyMember> {
+        let entry = (*self.entries.get(character)?)?;
+        self.summary.party.get(entry)
     }
 
     /// The party with the changes made so far.
@@ -476,6 +537,85 @@ mod tests {
 
     fn open(dir: &Path) -> Session {
         Session::open(&build::sample_save(dir, "QuickSave_3").unwrap()).unwrap()
+    }
+
+    fn character(template: &str, name: Option<&str>, level: u32, experience: u32) -> Character {
+        Character {
+            entity: crate::value::Uuid([0; 16]),
+            template: template.to_owned(),
+            name: name.map(str::to_owned),
+            level,
+            entitled_level: level,
+            experience,
+            abilities: [10; 6],
+            allocated: None,
+            gold: Vec::new(),
+        }
+    }
+
+    fn member(origin: &str, class: &str, level: u32, experience: u64) -> PartyMember {
+        PartyMember {
+            origin: origin.to_owned(),
+            race: String::new(),
+            level,
+            classes: vec![save::ClassEntry {
+                main: class.to_owned(),
+                sub: String::new(),
+            }],
+            experience_total: experience,
+            experience_in_level: 0,
+        }
+    }
+
+    const KARLACH: &str = "2c76687d-93a2-477b-8b18-8a14b549304c";
+    const SHADOWHEART: &str = "3ed74f06-3c60-42dc-83f6-f034cb47c679";
+    const ASTARION: &str = "c7c13742-bacd-460a-8f65-f864fe41f255";
+    const LAEZEL: &str = "58a69333-40bf-8358-1d17-fff240d7fb12";
+    const CUSTOM: &str = "e285d7b5-6b09-4857-89aa-a91e9e6898e5";
+
+    #[test]
+    fn companions_are_matched_to_the_summary_by_name() {
+        // As in a real save: the main character and Shadowheart have the same level and
+        // experience, and the entity data lists the party in another order.
+        let characters = [
+            character(KARLACH, Some("Karlach"), 5, 5655),
+            character(SHADOWHEART, Some("Shadowheart"), 5, 5595),
+            character(ASTARION, Some("Astarion"), 5, 5645),
+            character(CUSTOM, Some("Nelthryiis"), 5, 5595),
+        ];
+        let members = [
+            member("Generic", "Sorcerer", 5, 5595),
+            member("Shadowheart", "Cleric", 5, 5595),
+            member("Karlach", "Barbarian", 5, 5655),
+            member("Astarion", "Rogue", 5, 5645),
+        ];
+        assert_eq!(
+            summary_entries(&members, &characters),
+            [Some(2), Some(1), Some(3), Some(0)]
+        );
+    }
+
+    #[test]
+    fn others_are_matched_by_level_and_experience() {
+        let characters = [
+            // Played as an origin, so with no stored name; the summary spells it "Laezel".
+            character(LAEZEL, None, 3, 900),
+            character(CUSTOM, Some("Second player"), 3, 950),
+            character(CUSTOM, Some("First player"), 3, 900),
+            // Someone the summary doesn't list.
+            character("0f0e0d0c-0000-0000-0000-000000000000", None, 1, 0),
+        ];
+        let members = [
+            member("Generic", "Bard", 3, 900),
+            member("Laezel", "Fighter", 3, 900),
+            member("Generic", "Monk", 3, 950),
+            // A summon, which is in the summary but isn't a character here.
+            member("Djinni_PlanarAlly", "", 10, 5),
+        ];
+        assert_eq!(
+            summary_entries(&members, &characters),
+            [Some(1), Some(2), Some(0), None]
+        );
     }
 
     #[test]

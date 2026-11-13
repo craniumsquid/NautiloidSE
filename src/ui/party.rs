@@ -23,9 +23,8 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
     shared(ui, session, actions);
     ui.add_space(8.0);
 
-    let count = session.party().characters.len();
     if ui.available_width() >= TWO_COLUMNS_FROM {
-        for pair in (0..count).collect::<Vec<_>>().chunks(2) {
+        for pair in session.order().chunks(2) {
             ui.columns(2, |columns| {
                 for (column, &index) in columns.iter_mut().zip(pair) {
                     character_card(column, session, index, actions);
@@ -34,7 +33,7 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
             ui.add_space(8.0);
         }
     } else {
-        for index in 0..count {
+        for &index in session.order() {
             character_card(ui, session, index, actions);
             ui.add_space(8.0);
         }
@@ -120,22 +119,11 @@ fn shared(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
 
 /// "Level 5 · Sorcerer / Warlock", with the classes from the save's own summary.
 fn subtitle(session: &Session, index: usize, character: &Character) -> String {
-    // The summary lists the party in its own order; a character is matched by level and
-    // experience, which the entity data and the summary agree on.
-    let original = &session.original().characters;
-    let matching = |c: &Character| (c.level, c.experience as u64);
-    let nth = original[..index]
-        .iter()
-        .filter(|c| matching(c) == matching(&original[index]))
-        .count();
     let classes = session
-        .summary()
-        .party
-        .iter()
-        .filter(|m| (m.level, m.experience_total) == matching(&original[index]))
-        .nth(nth)
-        .map(|m| {
-            m.classes
+        .summary_of(index)
+        .map(|member| {
+            member
+                .classes
                 .iter()
                 .map(|c| c.main.as_str())
                 .collect::<Vec<_>>()

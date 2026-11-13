@@ -205,12 +205,19 @@ pub fn summarize(folder: &Path) -> Result<SaveSummary> {
         })
         .unwrap_or_default();
 
+    // `GameSessionID` stays the same for a whole playthrough. `GameID` does not: saves of
+    // one playthrough made in different sittings carry different ones.
+    let campaign = match text(&meta, root, "GameSessionID") {
+        id if id.is_empty() => text(&meta, root, "GameID"),
+        id => id,
+    };
+
     Ok(SaveSummary {
         folder: folder.to_owned(),
         lsv,
         screenshot,
         name,
-        campaign: text(&meta, root, "GameID"),
+        campaign,
         leader: text(&meta, root, "LeaderName"),
         kind,
         saved_at: meta
@@ -455,7 +462,13 @@ pub mod build {
         }
         let inner = Node::new("MetaData")
             .attr("Level", DataType::FixedString, text("WLD_Main_A"))
-            .attr("GameID", DataType::FixedString, text(&spec.campaign))
+            .attr("GameSessionID", DataType::FixedString, text(&spec.campaign))
+            // Different in every save, as it can be within one playthrough.
+            .attr(
+                "GameID",
+                DataType::FixedString,
+                text(&format!("game-id-of-{}", spec.name)),
+            )
             .attr("LeaderName", DataType::LSString, text(&spec.leader))
             .attr("SaveGameType", DataType::Byte, Value::Byte(spec.save_type))
             .attr(

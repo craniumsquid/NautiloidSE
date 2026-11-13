@@ -130,11 +130,15 @@ impl Character {
         if let Some(name) = &self.name {
             return name.clone();
         }
+        self.companion().unwrap_or("Unnamed character").to_owned()
+    }
+
+    /// The companion this character is, whether recruited or played as an origin.
+    pub fn companion(&self) -> Option<&'static str> {
         COMPANIONS
             .iter()
             .find(|(template, _)| *template == self.template)
-            .map_or("Unnamed character", |(_, name)| name)
-            .to_owned()
+            .map(|(_, name)| *name)
     }
 }
 

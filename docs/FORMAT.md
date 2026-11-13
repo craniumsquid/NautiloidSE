@@ -83,9 +83,13 @@ Everything is under `MetaData/MetaData`:
 - `Difficulty` (a byte), `Rulesets` (UUIDs; present when a preset is in use, the Honour save
   has two) and `CustomRulesetValues` (filled in when the rules are custom).
 - `SaveGameType`: 0 for a manual save, 2 for an autosave, 3 for the Honour Mode save.
-- `LeaderName`, `GameID`, `GameSessionID`, `SaveTime`, `TimeStamp`, `Seed`,
-  `DisabledSingleSave`, `DishonorDifficultySelection`, `Modded`, `HasUnofficialMods`,
-  `Crossplay`, `OriginalPlatform`.
+- `GameSessionID`: the playthrough. Every save of one campaign has the same one, and the
+  editor groups saves by it. `GameID` is not that: three saves of one playthrough in the
+  samples share a `GameSessionID` but have two `GameID`s between them, the two made minutes
+  apart sharing one.
+- `LeaderName`, `SaveTime`, `TimeStamp`, `Seed`, `DisabledSingleSave`,
+  `DishonorDifficultySelection`, `Modded`, `HasUnofficialMods`, `Crossplay`,
+  `OriginalPlatform`.
 - `PartyMetaData/CharacterMetaData`: an icon and a name handle per party member.
 
 ### `Globals.lsf`
