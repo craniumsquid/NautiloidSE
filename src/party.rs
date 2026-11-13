@@ -123,7 +123,31 @@ impl Character {
     pub fn gold_total(&self) -> u64 {
         self.gold.iter().map(|g| g.amount as u64).sum()
     }
+
+    /// A name to show: the stored one, or the companion's for a character played as an
+    /// origin, whose record has none.
+    pub fn display_name(&self) -> String {
+        if let Some(name) = &self.name {
+            return name.clone();
+        }
+        COMPANIONS
+            .iter()
+            .find(|(template, _)| *template == self.template)
+            .map_or("Unnamed character", |(_, name)| name)
+            .to_owned()
+    }
 }
+
+/// Companions by template. Each pairing was read from a sample save in which the character
+/// has a stored name.
+const COMPANIONS: [(&str, &str); 6] = [
+    ("3ed74f06-3c60-42dc-83f6-f034cb47c679", "Shadowheart"),
+    ("c7c13742-bacd-460a-8f65-f864fe41f255", "Astarion"),
+    ("2c76687d-93a2-477b-8b18-8a14b549304c", "Karlach"),
+    ("ad9af97d-75da-406a-ae13-7071c563f604", "Gale"),
+    ("c774d764-4a17-48dc-b470-32ace9ce447d", "Wyll"),
+    ("58a69333-40bf-8358-1d17-fff240d7fb12", "Lae'zel"),
+];
 
 /// The party's Inspiration points.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -558,36 +582,36 @@ pub fn set_inspiration(entities: &mut NewAge, amount: u32) -> Result<()> {
     )
 }
 
-#[cfg(test)]
-pub(crate) mod tests {
+/// Builds a small party from scratch. Used by tests, which have no real save to start from.
+pub mod build {
     use super::*;
     use crate::lsf::build::{self as tree, Node};
     use crate::newage::build::{blob, TableSpec};
     use crate::value::{DataType, Value};
 
     // Entities, by position in the entity list.
-    const HERO: u32 = 0;
-    const COMPANION: u32 = 1;
-    const PARTY: u32 = 2;
-    const HERO_GOLD: u32 = 3;
-    const BAG: u32 = 4;
-    const BAGGED_GOLD: u32 = 5;
-    const HERO_PACK: u32 = 6;
-    const BAG_INSIDE: u32 = 7;
-    const TRADER: u32 = 8;
-    const TRADER_PACK: u32 = 9;
-    const TRADER_GOLD: u32 = 10;
-    const ROPE: u32 = 11;
-    const ENTITY_COUNT: u32 = 12;
+    pub const HERO: u32 = 0;
+    pub const COMPANION: u32 = 1;
+    pub const PARTY: u32 = 2;
+    pub const HERO_GOLD: u32 = 3;
+    pub const BAG: u32 = 4;
+    pub const BAGGED_GOLD: u32 = 5;
+    pub const HERO_PACK: u32 = 6;
+    pub const BAG_INSIDE: u32 = 7;
+    pub const TRADER: u32 = 8;
+    pub const TRADER_PACK: u32 = 9;
+    pub const TRADER_GOLD: u32 = 10;
+    pub const ROPE: u32 = 11;
+    pub const ENTITY_COUNT: u32 = 12;
 
-    fn id(entity: u32) -> [u8; 16] {
+    pub fn id(entity: u32) -> [u8; 16] {
         let mut id = [0u8; 16];
         id[0] = entity as u8 + 1;
         id[15] = 0xA0;
         id
     }
 
-    pub(crate) fn uuid(entity: u32) -> Uuid {
+    pub fn uuid(entity: u32) -> Uuid {
         Uuid(id(entity))
     }
 
@@ -603,8 +627,9 @@ pub(crate) mod tests {
         entry
     }
 
-    /// A node tree with the creators the party reader looks at.
-    pub(crate) fn sample_globals() -> Lsf {
+    /// A `Globals.lsf` for the sample party: the creators the party reader looks at, and
+    /// the entity data from [`sample_entities`].
+    pub fn globals_lsf() -> Vec<u8> {
         let creator = |entity: u32, template: &str| {
             Node::new("Creator")
                 .attr("Entity", DataType::Uuid, Value::Uuid(uuid(entity)))
@@ -624,17 +649,27 @@ pub(crate) mod tests {
             .child(creator(TRADER_GOLD, GOLD_TEMPLATE))
             .child(creator(BAG, "00000000-0000-0000-0000-00000000bbbb"))
             .child(creator(ROPE, "00000000-0000-0000-0000-00000000cccc"));
-        let bytes = tree::lsf(&[
+        let entities = Node::new(crate::newage::NODE).attr(
+            crate::newage::NODE,
+            DataType::ScratchBuffer,
+            Value::Bytes(sample_entities().to_bytes()),
+        );
+        tree::lsf(&[
             Node::new("Characters").child(Node::new("CharacterFactory").child(characters)),
             Node::new("Items").child(Node::new("ItemFactory").child(items)),
+            entities,
         ])
-        .unwrap();
-        Lsf::parse(&bytes).unwrap()
+        .expect("the sample tree is well formed")
+    }
+
+    /// The sample `Globals.lsf`, parsed.
+    pub fn sample_globals() -> Lsf {
+        Lsf::parse(&globals_lsf()).expect("the sample document parses")
     }
 
     /// Entity data for a hero with 3385 gold loose and 371 in a bag, a companion with none,
     /// a trader with 500, and a party with 3 of 4 Inspiration.
-    pub(crate) fn sample_entities() -> NewAge {
+    pub fn sample_entities() -> NewAge {
         let entities: Vec<[u8; 16]> = (0..ENTITY_COUNT).map(id).collect();
         let stats = |abilities: [u32; 6]| {
             let mut row = words(&[4, 0]);
@@ -822,6 +857,12 @@ pub(crate) mod tests {
         }
         NewAge::parse(data.to_bytes()).unwrap()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build::*;
+    use super::*;
 
     #[test]
     fn reads_the_party() {
@@ -860,6 +901,12 @@ pub(crate) mod tests {
 
         let companion = &party.characters[1];
         assert_eq!(companion.name, None);
+        assert_eq!(
+            companion.display_name(),
+            "Karlach",
+            "named after the template"
+        );
+        assert_eq!(hero.display_name(), "Tav");
         assert_eq!(companion.allocated, None);
         assert_eq!(companion.abilities, [18, 13, 15, 8, 12, 10]);
         assert!(companion.gold.is_empty());

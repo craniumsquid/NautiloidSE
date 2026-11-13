@@ -10,6 +10,7 @@ use nautiloid_save_editor::newage::NewAge;
 use nautiloid_save_editor::party;
 use nautiloid_save_editor::save::{self, Save, Support};
 use nautiloid_save_editor::saves::{self, Listed};
+use nautiloid_save_editor::session::{Field, Session};
 use nautiloid_save_editor::value;
 use std::path::PathBuf;
 
@@ -351,4 +352,50 @@ fn the_browser_summary_agrees_with_the_full_read() {
             .windows(2)
             .all(|w| w[0].saved_at >= w[1].saved_at));
     }
+}
+
+#[test]
+fn a_session_exports_a_real_save_that_reopens_with_its_changes() {
+    let out = std::env::temp_dir().join(format!("nautiloid-real-export-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    for path in saves() {
+        let folder = path.parent().unwrap();
+        let Ok(mut session) = Session::open(folder) else {
+            // Saves from older patches are refused, with the reason.
+            let save = Save::open(&path).unwrap();
+            assert_ne!(save.support(), Support::Editable, "{}", path.display());
+            continue;
+        };
+        let before = std::fs::read(&path).unwrap();
+        let experience = session.value(Field::Experience(0)).unwrap();
+        session.set(Field::Experience(0), experience + 500, 0.0);
+        session.set(Field::LevelUps(0), 1, 10.0);
+        if let Some(points) = session.value(Field::Allocated(0, 3)) {
+            session.set(Field::Allocated(0, 3), points + 2, 20.0);
+        }
+        let expected = session.party().clone();
+
+        let name = session.suggested_name(&out);
+        let exported = session
+            .export(&out, &name)
+            .unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
+        assert!(
+            std::fs::read(&path).unwrap() == before,
+            "{}: original changed",
+            path.display()
+        );
+
+        let reopened = Session::open(&exported).unwrap();
+        assert!(!reopened.is_dirty());
+        assert_eq!(reopened.value(Field::Experience(0)), Some(experience + 500));
+        assert_eq!(reopened.value(Field::LevelUps(0)), Some(1));
+        assert_eq!(reopened.party().characters.len(), expected.characters.len());
+        // The browser lists it under its new name, in the same campaign.
+        let summary = saves::summarize(&exported).unwrap();
+        assert_eq!(summary.name, name);
+        assert_eq!(summary.campaign, session.summary().campaign);
+        std::fs::remove_dir_all(&exported).unwrap();
+    }
+    std::fs::remove_dir_all(&out).unwrap();
 }
