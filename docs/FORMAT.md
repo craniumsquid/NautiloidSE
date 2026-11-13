@@ -135,7 +135,7 @@ every Patch 8 sample:
 | `game.stats.v0.LevelComponent` | 4 bytes | Character level |
 | `game.stats.v3.StatsComponent` | 36 bytes | Strength to Charisma as six u32 from offset 8. These are totals with every bonus applied (an item that sets a score shows here). **Recalculated on load**: a change here is discarded |
 | `game.camp.v0.TotalSuppliesComponent` | 4 bytes | Camp supplies total. One row. **Recalculated on load**: a change here is discarded |
-| `game.character_creation.v1.CharacterCreationStatsComponent` | 88 bytes | Race and subrace identifiers, the character's name (offset and length at 56 and 64), and at 72 a pair of offsets to seven u32: the points put into each ability above the base of 8, with Strength at index 1. Party members and other recruited characters have a row. Whether the game derives ability scores from it is not known |
+| `game.character_creation.v1.CharacterCreationStatsComponent` | 88 bytes | Two identifiers (probably race and subrace), the character's name (offset and length at 56 and 64), and at 72 a pair of offsets to seven u32: the points put into each ability above the base of 8, with Strength at index 1. Seven characters have a row in the sample, the four party members among them. Whether the game derives ability scores from it is not known |
 | `game.action_resources.v1.Component` | 16 bytes | A pair of offsets to 64-byte entries: a resource identifier, a level, then the amount and the maximum as 64-bit floats. Action points, movement, spell slots and class resources appear here. Nothing in it looks like Inspiration |
 
 Many rows hold a pair of offsets like these, begin and end, to an array elsewhere in the data
