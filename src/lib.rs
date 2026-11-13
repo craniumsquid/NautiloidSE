@@ -6,6 +6,7 @@
 //! * [`newage`]: the entity data blob inside `Globals.lsf` and the level caches.
 //! * [`save`]: a save as a whole.
 //! * [`party`]: the party's numbers in the entity data, and the edits to them.
+//! * [`saves`]: finding saves on disk and describing them for the save browser.
 //! * [`diff`]: what differs between two documents.
 
 pub mod diff;
@@ -14,4 +15,5 @@ pub mod lspk;
 pub mod newage;
 pub mod party;
 pub mod save;
+pub mod saves;
 pub mod value;

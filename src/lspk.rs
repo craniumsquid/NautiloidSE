@@ -310,42 +310,7 @@ impl Package {
 
     /// The file's uncompressed contents.
     pub fn unpack(&self, entry: &Entry) -> Result<Vec<u8>> {
-        let stored = self.stored(entry);
-        let expected = entry.len();
-        ensure!(
-            expected <= MAX_FILE_LEN,
-            "{}: implausible size {expected}",
-            entry.name
-        );
-        let out = match entry.method() {
-            Method::None => stored.to_vec(),
-            Method::Zlib => {
-                let mut out = Vec::with_capacity(expected);
-                flate2::read::ZlibDecoder::new(stored)
-                    .take(expected as u64 + 1)
-                    .read_to_end(&mut out)
-                    .with_context(|| format!("{}: zlib", entry.name))?;
-                out
-            }
-            Method::Lz4 => lz4_flex::block::decompress(stored, expected)
-                .map_err(|e| anyhow!("{}: lz4: {e}", entry.name))?,
-            Method::Zstd => {
-                let mut out = Vec::with_capacity(expected);
-                zstd::stream::read::Decoder::new(stored)
-                    .with_context(|| format!("{}: zstd", entry.name))?
-                    .take(expected as u64 + 1)
-                    .read_to_end(&mut out)
-                    .with_context(|| format!("{}: zstd", entry.name))?;
-                out
-            }
-        };
-        ensure!(
-            out.len() == expected,
-            "{}: unpacked to {} bytes, expected {expected}",
-            entry.name,
-            out.len()
-        );
-        Ok(out)
+        unpack_stored(&entry.name, entry.method(), self.stored(entry), entry.len())
     }
 
     /// The uncompressed contents of the file called `name`.
@@ -458,6 +423,110 @@ impl Package {
     }
 }
 
+fn unpack_stored(name: &str, method: Method, stored: &[u8], expected: usize) -> Result<Vec<u8>> {
+    ensure!(
+        expected <= MAX_FILE_LEN,
+        "{name}: implausible size {expected}"
+    );
+    let out = match method {
+        Method::None => stored.to_vec(),
+        Method::Zlib => {
+            let mut out = Vec::with_capacity(expected);
+            flate2::read::ZlibDecoder::new(stored)
+                .take(expected as u64 + 1)
+                .read_to_end(&mut out)
+                .with_context(|| format!("{name}: zlib"))?;
+            out
+        }
+        Method::Lz4 => lz4_flex::block::decompress(stored, expected)
+            .map_err(|e| anyhow!("{name}: lz4: {e}"))?,
+        Method::Zstd => {
+            let mut out = Vec::with_capacity(expected);
+            zstd::stream::read::Decoder::new(stored)
+                .with_context(|| format!("{name}: zstd"))?
+                .take(expected as u64 + 1)
+                .read_to_end(&mut out)
+                .with_context(|| format!("{name}: zstd"))?;
+            out
+        }
+    };
+    ensure!(
+        out.len() == expected,
+        "{name}: unpacked to {} bytes, expected {expected}",
+        out.len()
+    );
+    Ok(out)
+}
+
+/// Reads a few small files out of a package on disk without loading the rest: the header,
+/// the file list at the end, then only the files asked for. A save is tens of megabytes and
+/// a saves folder holds hundreds, so listing them must not read each one whole.
+///
+/// Returns the contents in the order of `names`, with `None` for a file the package lacks.
+pub fn peek(path: &std::path::Path, names: &[&str]) -> Result<Vec<Option<Vec<u8>>>> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let file_len = file.metadata()?.len();
+    let mut header = [0u8; HEADER_LEN];
+    file.read_exact(&mut header)
+        .context("too short to be a save package")?;
+    ensure!(
+        &header[0..4] == MAGIC,
+        "not a save package (no LSPK signature)"
+    );
+    let version = u32_at(&header, 4);
+    ensure!(
+        version == VERSION,
+        "package version {version} is not supported (expected {VERSION})"
+    );
+    let list_offset = u64_at(&header, 8);
+    let list_size = u32_at(&header, 16) as u64;
+    ensure!(
+        list_size >= 8 && list_offset >= HEADER_LEN as u64 && list_offset + list_size <= file_len,
+        "file list is outside the file"
+    );
+    let mut list = vec![0u8; list_size as usize];
+    file.seek(SeekFrom::Start(list_offset))?;
+    file.read_exact(&mut list)?;
+    let count = u32_at(&list, 0) as usize;
+    ensure!(count <= 1 << 20, "implausible file count {count}");
+    let table = lz4_flex::block::decompress(&list[8..], count * ENTRY_LEN)
+        .map_err(|e| anyhow!("file list: {e}"))?;
+    ensure!(table.len() == count * ENTRY_LEN, "file list is truncated");
+
+    let mut found = vec![None; names.len()];
+    for raw in table.chunks_exact(ENTRY_LEN) {
+        let name_len = raw[..NAME_LEN]
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(NAME_LEN);
+        let Some(wanted) = names.iter().position(|n| n.as_bytes() == &raw[..name_len]) else {
+            continue;
+        };
+        let name = names[wanted];
+        let offset = u32_at(raw, 256) as u64 | (u16_at(raw, 260) as u64) << 32;
+        let flags = raw[263];
+        let stored_len = u32_at(raw, 264) as usize;
+        let uncompressed_len = u32_at(raw, 268) as usize;
+        let method = Method::from_flags(flags).with_context(|| name.to_owned())?;
+        ensure!(
+            offset >= HEADER_LEN as u64 && offset + stored_len as u64 <= list_offset,
+            "{name}: data is outside the package"
+        );
+        ensure!(stored_len <= MAX_FILE_LEN, "{name}: implausible size");
+        let mut stored = vec![0u8; stored_len];
+        file.seek(SeekFrom::Start(offset))?;
+        file.read_exact(&mut stored)?;
+        let expected = if method == Method::None {
+            stored_len
+        } else {
+            uncompressed_len
+        };
+        found[wanted] = Some(unpack_stored(name, method, &stored, expected)?);
+    }
+    Ok(found)
+}
+
 /// Builds a package from scratch. Used by tests, which have no real save to start from.
 pub fn build(files: &[(&str, &[u8])]) -> Result<Vec<u8>> {
     let mut out = vec![0u8; HEADER_LEN];
@@ -540,6 +609,29 @@ mod tests {
         assert_eq!(written.read_file("empty.bin").unwrap(), b"");
         assert_ne!(written.stored_md5(), before);
         assert_eq!(written.compute_md5().unwrap(), written.stored_md5());
+    }
+
+    #[test]
+    fn peeks_at_named_files_on_disk() {
+        let bytes = sample();
+        let path = std::env::temp_dir().join(format!("nautiloid-peek-{}.lsv", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+        let found = peek(&path, &["empty.bin", "missing.lsf", "meta.lsf"]).unwrap();
+        assert_eq!(found[0].as_deref(), Some(b"".as_slice()));
+        assert_eq!(found[1], None);
+        assert_eq!(found[2].as_deref(), Some(b"first file".as_slice()));
+
+        // Not a package, and a package cut short.
+        std::fs::write(
+            &path,
+            b"not a package at all, but long enough to have a header",
+        )
+        .unwrap();
+        assert!(peek(&path, &["meta.lsf"]).is_err());
+        std::fs::write(&path, &bytes[..bytes.len() - 9]).unwrap();
+        assert!(peek(&path, &["meta.lsf"]).is_err());
+        std::fs::remove_file(&path).unwrap();
+        assert!(peek(&path, &["meta.lsf"]).is_err());
     }
 
     #[test]

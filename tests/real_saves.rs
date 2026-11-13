@@ -9,6 +9,7 @@ use nautiloid_save_editor::lspk::{Method, Package};
 use nautiloid_save_editor::newage::NewAge;
 use nautiloid_save_editor::party;
 use nautiloid_save_editor::save::{self, Save, Support};
+use nautiloid_save_editor::saves::{self, Listed};
 use nautiloid_save_editor::value;
 use std::path::PathBuf;
 
@@ -303,5 +304,51 @@ fn party_edits_read_back_from_a_written_save() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn the_browser_summary_agrees_with_the_full_read() {
+    let Some(root) = std::env::var_os("NAUTILOID_SAVES") else {
+        return;
+    };
+    let listed = saves::scan(std::path::Path::new(&root)).unwrap();
+    assert!(!listed.is_empty());
+    for entry in &listed {
+        let Listed::Save(summary) = entry else {
+            panic!("a sample save could not be summarized: {entry:?}");
+        };
+        // The summary reads two small files; opening the save reads all of it. They must
+        // tell the same story.
+        let save = Save::open(&summary.folder).unwrap();
+        let info = save.info().unwrap();
+        assert_eq!(summary.lsv, save.path);
+        assert_eq!(summary.game_version, info.game_version, "{}", summary.name);
+        assert_eq!(summary.party, info.party, "{}", summary.name);
+        assert_eq!(
+            summary.support == Support::Editable,
+            save.support() == Support::Editable
+        );
+        assert!(
+            !summary.campaign.is_empty() && !summary.leader.is_empty(),
+            "{}",
+            summary.name
+        );
+        assert!(
+            summary.saved_at > 1_600_000_000,
+            "{}: {}",
+            summary.name,
+            summary.saved_at
+        );
+        assert!(summary.screenshot.is_some(), "{}", summary.name);
+    }
+    let campaigns = saves::campaigns(&listed);
+    let total: usize = campaigns.iter().map(|c| c.saves.len()).sum();
+    assert_eq!(total, listed.len());
+    for campaign in &campaigns {
+        assert!(campaign
+            .saves
+            .windows(2)
+            .all(|w| w[0].saved_at >= w[1].saved_at));
     }
 }
