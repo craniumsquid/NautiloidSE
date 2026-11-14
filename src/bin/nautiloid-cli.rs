@@ -32,6 +32,9 @@ A <save> is a .lsv file or the save folder that holds one.
   party <save>
       The party as the entity data has it: level, experience, ability scores, gold and
       Inspiration.
+  items <save>
+      What each character and the camp chest hold, with the amount of each stack and the
+      camp supplies food is worth.
   edit <save> <folder> <name> [--xp WHO=N,...] [--level-up WHO,...]
        [--ability WHO:ABILITY=POINTS,...] [--gold WHO=N,...] [--inspiration N]
        [--approval WHO=N,...]
@@ -164,6 +167,7 @@ fn run(raw: &[String]) -> Result<()> {
             )?,
             out,
         ),
+        "items" => items(&Args::parse(rest, &[], &[])?, out),
         "tables" => tables(&Args::parse(rest, &[], &[])?, out),
         "rows" => rows(&Args::parse(rest, &[], &["limit"])?, out),
         "entity" => entity(&Args::parse(rest, &[], &[])?, out),
@@ -813,6 +817,43 @@ fn rows(args: &Args, out: &mut impl Write) -> Result<()> {
             "… {} more (raise --limit to see them)",
             table.rows - limit
         )?;
+    }
+    Ok(())
+}
+
+fn items(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(1, "items <save>")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let globals = save.lsf(save::GLOBALS)?;
+    let party = party::read(&globals, &NewAge::from_lsf(&globals)?)?;
+    let mut supplies = 0u64;
+    for inventory in &party.inventories {
+        let holder = match inventory.holder {
+            party::Holder::Character(c) => party.characters[c].display_name(),
+            party::Holder::CampChest => "Camp chest".to_owned(),
+        };
+        writeln!(out, "{holder}: {} items", inventory.items.len())?;
+        for item in &inventory.items {
+            let amount = match item.stacked {
+                true => format!("x{}", item.amount),
+                false => "one".to_owned(),
+            };
+            let supply = item
+                .supply
+                .map(|s| format!("  supplies {s} each"))
+                .unwrap_or_default();
+            let bagged = if item.in_container {
+                "  (in a container)"
+            } else {
+                ""
+            };
+            writeln!(out, "  {amount:>6}  {}{supply}{bagged}", item.stats)?;
+            supplies += item.supply.unwrap_or(0) as u64 * item.amount as u64;
+        }
+    }
+    writeln!(out, "camp supplies by this count: {supplies}")?;
+    if let Some(total) = party.camp_supplies {
+        writeln!(out, "camp supplies as stored: {total}")?;
     }
     Ok(())
 }

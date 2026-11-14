@@ -24,6 +24,8 @@ const MERGE_WINDOW: f64 = 1.0;
 pub const MAX_GOLD: i32 = 9_999_999;
 /// The most experience this editor will set.
 pub const MAX_EXPERIENCE: i32 = 9_999_999;
+/// The most this editor will put in a stack of items. A limit of the editor, not the game.
+pub const MAX_AMOUNT: i32 = 9_999;
 
 /// One value that can be edited. Characters and gold stacks are named by position in the
 /// party as it was read.
@@ -41,6 +43,8 @@ pub enum Field {
     Inspiration,
     /// One of a companion's approval ratings: the companion, then which rating.
     Approval(usize, usize),
+    /// How many a stack of items holds: the inventory, then the item in it.
+    Amount(usize, usize),
 }
 
 /// One difference between the save as opened and as it now stands.
@@ -138,6 +142,13 @@ fn field_of(party: &Party, field: Field) -> Option<i32> {
         Field::Gold(c, stack) => character(c)?.gold.get(stack).map(|g| signed(g.amount)),
         Field::Inspiration => party.inspiration.map(|i| signed(i.amount)),
         Field::Approval(c, which) => character(c)?.approval.get(which).map(|a| a.rating),
+        Field::Amount(inventory, item) => party
+            .inventories
+            .get(inventory)?
+            .items
+            .get(item)
+            .filter(|item| item.stacked)
+            .map(|item| signed(item.amount)),
     }
 }
 
@@ -167,6 +178,7 @@ fn set_field(party: &mut Party, field: Field, value: i32) {
             }
         }
         Field::Approval(..) => {}
+        Field::Amount(inventory, item) => party.inventories[inventory].items[item].amount = value,
     }
 }
 
@@ -273,6 +285,8 @@ impl Session {
                 let now = self.original_value(field).unwrap_or(0);
                 party::APPROVAL_MIN.min(now)..=party::APPROVAL_MAX.max(now)
             }
+            // A stack the save already has above the editor's limit keeps its room.
+            Field::Amount(..) => 1..=MAX_AMOUNT.max(self.original_value(field).unwrap_or(1)),
         }
     }
 
@@ -368,6 +382,14 @@ impl Session {
         if self.original.inspiration.is_some() {
             fields.push(Field::Inspiration);
         }
+        for (i, inventory) in self.original.inventories.iter().enumerate() {
+            let stacked = inventory
+                .items
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| item.stacked);
+            fields.extend(stacked.map(|(item, _)| Field::Amount(i, item)));
+        }
         fields
     }
 
@@ -416,6 +438,27 @@ impl Session {
                 };
                 (name(c), what)
             }
+            Field::Amount(inventory, item) => {
+                let inventory = self.original.inventories.get(inventory);
+                let who = inventory.map_or_else(String::new, |i| self.holder_name(i.holder));
+                let what = inventory
+                    .and_then(|i| i.items.get(item))
+                    .map_or_else(String::new, |item| tidy(&item.stats));
+                (who, what)
+            }
+        }
+    }
+
+    /// Who holds an inventory, by name.
+    pub fn holder_name(&self, holder: party::Holder) -> String {
+        match holder {
+            party::Holder::Character(c) => self
+                .original
+                .characters
+                .get(c)
+                .map(Character::display_name)
+                .unwrap_or_default(),
+            party::Holder::CampChest => "Camp chest".to_owned(),
         }
     }
 
@@ -503,6 +546,11 @@ impl Session {
                     party::set_gold(&mut entities, character(c).gold[stack].item, count?)?
                 }
                 Field::Inspiration => party::set_inspiration(&mut entities, count?)?,
+                Field::Amount(inventory, item) => party::set_amount(
+                    &mut entities,
+                    self.original.inventories[inventory].items[item].entity,
+                    count?,
+                )?,
                 Field::Approval(c, which) => party::set_approval(
                     &mut entities,
                     character(c).entity,
@@ -551,6 +599,50 @@ impl Session {
             return Err(error.context("the export was checked and removed"));
         }
         Ok(folder)
+    }
+}
+
+/// The game's own name for an item, made readable: `CONS_FOOD_Fruit_Apple` as "Fruit
+/// Apple", `OBJ_Kit_ThievesTools` as "Kit Thieves Tools". The names the game shows are in its
+/// language files, not in the save.
+pub fn tidy(stats: &str) -> String {
+    let parts: Vec<&str> = stats.split('_').filter(|p| !p.is_empty()).collect();
+    // Leading words in capitals are categories: OBJ, CONS, FOOD, a mod's initials.
+    let is_category = |p: &str| {
+        p.len() <= 5
+            && p.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+    };
+    let skip = parts
+        .iter()
+        .take(parts.len().saturating_sub(1))
+        .take_while(|p| is_category(p))
+        .count();
+    let mut words: Vec<String> = Vec::new();
+    for part in &parts[skip..] {
+        let shouting = part.len() > 1 && !part.chars().any(|c| c.is_lowercase());
+        if shouting {
+            // APPLE as Apple.
+            let mut chars = part.chars();
+            let first = chars.next().unwrap_or_default();
+            words.push(format!("{first}{}", chars.as_str().to_lowercase()));
+            continue;
+        }
+        // ThievesTools as Thieves Tools.
+        let mut word = String::new();
+        let mut previous_lower = false;
+        for c in part.chars() {
+            if c.is_uppercase() && previous_lower {
+                words.push(std::mem::take(&mut word));
+            }
+            previous_lower = c.is_lowercase();
+            word.push(c);
+        }
+        words.push(word);
+    }
+    match words.is_empty() {
+        true => "Unnamed item".to_owned(),
+        false => words.join(" "),
     }
 }
 
@@ -634,6 +726,19 @@ mod tests {
     const ASTARION: &str = "c7c13742-bacd-460a-8f65-f864fe41f255";
     const LAEZEL: &str = "58a69333-40bf-8358-1d17-fff240d7fb12";
     const CUSTOM: &str = "e285d7b5-6b09-4857-89aa-a91e9e6898e5";
+
+    #[test]
+    fn tidies_the_games_item_names() {
+        assert_eq!(tidy("CONS_FOOD_Fruit_Apple"), "Fruit Apple");
+        assert_eq!(tidy("OBJ_Kit_ThievesTools"), "Kit Thieves Tools");
+        assert_eq!(tidy("FOOD_FRUIT_APPLE"), "Apple");
+        assert_eq!(tidy("WPN_QMD_Mace"), "Mace");
+        assert_eq!(tidy("Food_Haggis"), "Food Haggis");
+        assert_eq!(tidy("OBJ_Potion_Healing"), "Potion Healing");
+        assert_eq!(tidy("ARM_Camp_Sandals_A1_Black"), "Camp Sandals A1 Black");
+        assert_eq!(tidy("OBJ"), "Obj");
+        assert_eq!(tidy(""), "Unnamed item");
+    }
 
     #[test]
     fn companions_are_matched_to_the_summary_by_name() {

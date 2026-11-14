@@ -128,7 +128,9 @@ fn shared(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
             widgets::row(
                 ui,
                 "Camp supplies",
-                Some("Worked out by the game from the food you carry, so it can't be set here."),
+                Some(
+                    "Worked out by the game from your food. Change the food on the Inventory tab.",
+                ),
                 |ui| {
                     ui.label(
                         egui::RichText::new(grouped(supplies as u64))

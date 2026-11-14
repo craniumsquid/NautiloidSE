@@ -71,6 +71,53 @@ fn approval_has_its_own_tab_and_can_go_below_zero() {
 }
 
 #[test]
+fn inventory_lists_holders_and_changes_a_stack() {
+    use nautiloid_save_editor::session::{Field, Session};
+    let (dir, mut ui) = open_sample("inventory");
+    ui.click("Inventory");
+    // The hero's things: one stack and two single items.
+    assert!(ui.sees("STACKS (1)"));
+    assert!(ui.sees("Potion Healing"));
+    assert!(ui.sees("OBJ_Potion_Healing"));
+    assert!(ui.sees("SINGLE ITEMS (2)"));
+    assert!(ui.sees("Rope"));
+    ui.click("+");
+    assert_eq!(
+        ui.app.session().unwrap().value(Field::Amount(0, 1)),
+        Some(4)
+    );
+    ui.snapshot("13-inventory");
+
+    // The camp chest, where food shows what it is worth.
+    ui.click("Camp chest");
+    assert!(ui.sees("Fruit Apple"));
+    assert!(ui.sees("CONS_FOOD_Fruit_Apple · 3 camp supplies each"));
+    ui.click("+");
+    assert_eq!(
+        ui.app.session().unwrap().value(Field::Amount(1, 0)),
+        Some(5)
+    );
+    ui.snapshot("13b-inventory-camp-chest");
+
+    // Searching narrows the list.
+    ui.click("Tav");
+    ui.click("Search items");
+    ui.type_text("rope");
+    assert!(ui.sees("STACKS (0)"));
+    assert!(ui.sees("SINGLE ITEMS (1)"));
+
+    // Both changes are on this tab's count and survive an export.
+    assert_eq!(ui.app.session().unwrap().changes().len(), 2);
+    ui.click("Export as a new save…");
+    ui.click("Export");
+    let exported =
+        Session::open(&dir.join("Tav-1234__Shattered Sanctum - 8h 02m - Edited")).unwrap();
+    assert_eq!(exported.value(Field::Amount(0, 1)), Some(4));
+    assert_eq!(exported.value(Field::Amount(1, 0)), Some(5));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn exporting_an_honour_mode_save_says_it_is_untried() {
     let dir = temp_dir("honour");
     sample_saves(&dir);

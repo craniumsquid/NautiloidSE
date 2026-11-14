@@ -12,9 +12,10 @@ original, and the new save is read back and checked before the editor keeps it.
 
 ## What it can change
 
-So far, the party:
+The party, and the companions waiting at camp:
 
-- **Experience**, for each character.
+- **Experience**, for each character in the party. A companion at camp has none of their
+  own: the game awards it when they join.
 - **Level-ups.** The editor entitles a character to the next level, and the game offers the
   level-up and takes you through the choices.
 - **Ability points**: the points put into each ability at character creation. The game adds
@@ -22,8 +23,17 @@ So far, the party:
 - **Gold**, for a character who already carries some.
 - **Inspiration**, once the party has earned a point.
 
-Each of these has been changed in a save that then loaded in the game (build `4.1.1.7631656`)
-with the new value. Inventory, approval and the mod list come next.
+Each of these has been changed for a party member in a save that then loaded in the game
+(build `4.1.1.7631656`) with the new value.
+
+Newer, and **not yet tried in the game**:
+
+- **Inventory**: how many each stack holds, for every character and the camp chest. Food
+  shows the camp supplies it is worth. Items go by the game's internal names for now.
+- **Approval**: what each companion thinks of your character.
+- The same party changes made to a companion at camp.
+
+The mod list comes next.
 
 Saves from before Patch 8 are listed but can't be edited.
 

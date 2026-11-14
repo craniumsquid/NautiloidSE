@@ -10,6 +10,7 @@ pub mod browser;
 pub mod changes;
 pub mod dialogs;
 pub mod info;
+pub mod inventory;
 pub mod party;
 pub mod theme;
 pub mod thumbs;
@@ -56,17 +57,19 @@ pub struct Options {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
     Party,
+    Inventory,
     Approval,
     Info,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 3] = [Tab::Party, Tab::Approval, Tab::Info];
+    pub const ALL: [Tab; 4] = [Tab::Party, Tab::Inventory, Tab::Approval, Tab::Info];
 
     /// The tab a field is edited on.
     pub fn of(field: Field) -> Tab {
         match field {
             Field::Approval(..) => Tab::Approval,
+            Field::Amount(..) => Tab::Inventory,
             _ => Tab::Party,
         }
     }
@@ -74,6 +77,7 @@ impl Tab {
     pub fn label(self) -> &'static str {
         match self {
             Tab::Party => "Party",
+            Tab::Inventory => "Inventory",
             Tab::Approval => "Approval",
             Tab::Info => "Save info",
         }
@@ -475,6 +479,7 @@ impl EditorApp {
                                     })
                                     .show(ui, |ui| match self.tab {
                                         Tab::Party => party::show(ui, session, actions),
+                                        Tab::Inventory => inventory::show(ui, session, actions),
                                         Tab::Approval => approval::show(ui, session, actions),
                                         Tab::Info => info::show(ui, session, now),
                                     });

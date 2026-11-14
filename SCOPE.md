@@ -47,16 +47,18 @@ Built (see Status).
 ### Phase 2: edits, in this order
 
 1. **Party.** Built. Per character: experience, level-ups, ability scores and gold.
-   Party-wide: Inspiration.
+   Party-wide: Inspiration. Companions waiting at camp are listed too; they have no
+   experience to change, since the game awards it when they join.
    - A level-up is granted, not applied: the editor entitles the character to the next level
      and the game takes the player through the choices.
    - Ability scores are changed through the points allocated to each ability; the game adds
      the character's other bonuses on top.
    - Gold is per character. A character who carries none can't be given any until items can
      be added (Phase 3).
-2. **Inventory.** Stack quantities, for each character and the camp chest. Camp supplies
-   belong here: the game works the total out from the food items.
-3. **Approval.** Companion approval values.
+2. **Inventory.** Built. Stack quantities, for each character and the camp chest. Camp
+   supplies belong here: the game works the total out from the food items. Items go by the
+   game's internal names, tidied; the names the game shows come with the catalog in Phase 3.
+3. **Approval.** Built. Each companion's approval of the player's character.
 4. **Mods.** The save's list of required mods, with removal of ones that are no longer
    installed.
 
@@ -97,7 +99,16 @@ beside the original.
 - Builds for Windows and Linux are made by CI for `main`; macOS for version tags and on
   request.
 
-Next is the Inventory tab.
+Since then: companions at camp, the Inventory tab and the Approval tab. What has and has
+not been tried in the game:
+
+- Tried, on two campaigns and from the Windows app: experience, level-ups, ability points,
+  gold and Inspiration for a party member.
+- Not yet tried: any change to a companion at camp, the amount of a stack other than gold,
+  and approval. Each is either the same field as one that has been tried or was decoded
+  from the game's own change, but none has been loaded in the game.
+
+Next is the Mods tab.
 
 Phase 0 is built and passes on all eleven sample saves:
 

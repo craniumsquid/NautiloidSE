@@ -149,6 +149,26 @@ every Patch 8 sample:
 | `game.inventory.v1.IsOwnedComponent` | 8 bytes | On an inventory: an offset to the entity identifier of its owner. An item inside a bag is in the bag's inventory, whose owner is the bag, so finding the character means following this up |
 | `game.action_resources.v1.Component` | 16 bytes | A pair of offsets to 64-byte entries: a resource identifier, a level, then the amount and the maximum as 64-bit floats. Action points, movement, spell slots and class resources appear here. The party has its own entity, the one that owns the `game.party.*` rows, and it holds three more: `c38dea32-f5cb-4e38-a341-eb3fa653fb3e` matches the Inspiration count the game shows, and `a24ca5e2-01e1-48fd-a4c8-79b8817f0a18` is 2 of 2, probably short rests |
 
+### Items
+
+- An item is in an inventory (`MemberComponent`), the inventory has an owner
+  (`IsOwnedComponent`), and a bag is an item with an inventory of its own, so the holder is
+  found by following owners up. The camp chest is the one entity with a
+  `game.camp.v1.ChestComponent` row.
+- The game's name for an item (`OBJ_Potion_Healing`, `CONS_FOOD_Fruit_Apple`) is the `Stats`
+  attribute of its node under `Items/ItemFactory/Items`, which lists the items in the same
+  order as `Items/ItemFactory/Creators`. The names the game shows are in its language
+  files, not in the save.
+- Only a stack has an amount stored, in its `StackEntry`, the same field as a gold stack's.
+  A stack can hold 1. An item with no stack is one of its kind and has no amount to change.
+- Food carries `game.camp.v0.SupplyComponent` (4 bytes): the camp supplies one of it is
+  worth. Adding up worth times amount over the party, the companions at camp and the camp
+  chest gives the stored total exactly in two samples (165 and 660) and misses in two
+  others (773 against 782, 217 against 177), so the game's rule is close to this but not
+  this.
+
+The editor changes the amount of any stack. That is **tried in the game for gold only**.
+
 ### Approval
 
 `game.approval.v0.Ratings` has a 48-byte row on each of the ten possible companions, met or
@@ -194,8 +214,8 @@ gained, each with identifiers for the class, subclass and feat taken.
 
 Tables that look like the remaining Phase 2 targets, not yet decoded:
 
-- `game.inventory.v0.Stack`, `StackEntry`, `NewStackComponent`, `StackMemberComponent`,
-  `ContainerComponent`, `ContainerSlotData`, `MemberComponent`: inventories and stacks.
+- `game.inventory.v0.StackMemberComponent`, `ContainerComponent`, `ContainerSlotData`: the
+  rest of inventories and stacks, which adding an item will need.
 - `game.stats.v0.ClassesComponent` and the selector tables under `game.character_creation.*`:
   class levels and the choices made at each level-up, which a level change may have to agree
   with.
@@ -237,7 +257,11 @@ sticks depends on whether the game keeps the value or works it out again from so
   threshold of 6500 in that modded game; an unmodded game's is 14000.
 - Where the bonuses on top of the allocated points are recorded (the +2 and +1 chosen at
   creation, and ability improvements taken at level-up).
-- Where camp supplies come from. The total is recalculated, presumably from the food items.
+- Exactly which food the camp supplies total counts. See Items.
+- Whether a companion at camp keeps a change to their ability points, entitled level or gold
+  when they join the party, and whether approval and item amounts other than gold stick.
+  They are the same fields as ones that do, or decoded from the game's own change, but have
+  not been tried.
 - How to give gold to a character who carries none. There is no stack to change, so it means
   creating an item.
 - Whether the game checks the package's MD5 or the per-mod MD5s on load.
