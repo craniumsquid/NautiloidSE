@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/icon/icon.png" width="128" alt=""></p>
+
 # Nautiloid Save Editor
 
 A desktop save editor for **Baldur's Gate 3** (Patch 8) on Windows, macOS and Linux, including

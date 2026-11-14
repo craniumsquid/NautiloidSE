@@ -40,15 +40,24 @@ impl eframe::App for App {
     }
 }
 
+/// The icon shown on the window and the taskbar.
+fn icon() -> Option<egui::IconData> {
+    eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon/icon.png")).ok()
+}
+
 fn main() -> eframe::Result {
     // A save, a save folder or a folder of saves can be given on the command line.
     let open = std::env::args_os().nth(1).map(PathBuf::from);
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("Nautiloid Save Editor")
+        .with_inner_size([1440.0, 900.0])
+        .with_min_inner_size([980.0, 640.0])
+        .with_drag_and_drop(true);
+    if let Some(icon) = icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let native = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Nautiloid Save Editor")
-            .with_inner_size([1440.0, 900.0])
-            .with_min_inner_size([980.0, 640.0])
-            .with_drag_and_drop(true),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(

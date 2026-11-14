@@ -89,6 +89,7 @@ jobs:
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" upload
           cp target/release/nautiloid-save-editor "$app/Contents/MacOS/"
           cp packaging/macos/Info.plist "$app/Contents/"
+          cp packaging/macos/icon.icns "$app/Contents/Resources/"
           cp LICENSE assets/fonts/OFL-*.txt "$app/Contents/Resources/"
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
           /usr/libexec/PlistBuddy \
