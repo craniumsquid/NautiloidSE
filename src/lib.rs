@@ -12,6 +12,7 @@
 //! * [`diff`]: what differs between two documents.
 
 pub mod diff;
+pub mod items;
 pub mod lsf;
 pub mod lspk;
 pub mod mods;

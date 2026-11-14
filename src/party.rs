@@ -12,7 +12,7 @@
 use crate::lsf::Lsf;
 use crate::newage::{NewAge, TableId};
 use crate::value::Uuid;
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{anyhow, ensure, Result};
 use std::collections::HashMap;
 
 /// Tables and field offsets in the entity data.
@@ -70,6 +70,9 @@ pub mod tables {
     pub const SUPPLY: &str = "game.camp.v0.SupplyComponent";
     /// One row, on the camp chest.
     pub const CAMP_CHEST: &str = "game.camp.v1.ChestComponent";
+    /// One byte, on every item. A character can be in an inventory too (a carried corpse,
+    /// in one sample), and has none.
+    pub const ITEM: &str = "game.item.v0.ItemComponent";
 }
 
 pub const ABILITIES: [&str; 6] = [
@@ -309,8 +312,8 @@ fn stats_names(globals: &Lsf) -> HashMap<Uuid, String> {
 
 /// Where a stacked item's amount is and what it holds.
 struct Stacked {
-    /// Row of [`tables::STACK_ENTRY`].
-    entry: usize,
+    /// Where its stack entry is in the data section.
+    entry: u64,
     amount: u32,
 }
 
@@ -330,19 +333,13 @@ impl Inventories {
         let mut out = Inventories::default();
         let table = |name: &str| entities.table(name);
 
-        // A save with no stacks or no inventories simply lacks the tables.
-        if let (Some(stack_of), Some(stack), Some(entry)) = (
-            table(tables::STACK_OF),
-            table(tables::STACK),
-            table(tables::STACK_ENTRY),
-        ) {
+        // A save with no stacks or no inventories simply lacks the tables. Offsets are
+        // followed wherever they lead: the game keeps what they point at in a table, and this
+        // editor appends what it adds to the end of the data.
+        if let Some(stack_of) = table(tables::STACK_OF) {
             for (row, _) in entities.owned_rows(stack_of) {
                 let target = u64_of(entities.row(stack_of, row), 0);
-                let Some((found, stack_row, 0)) = entities.locate(target) else {
-                    bail!("a stack points outside the stack table");
-                };
-                ensure!(found == stack, "a stack points outside the stack table");
-                let fields = entities.row(stack, stack_row);
+                let fields = entities.data(target, 32)?;
                 let (items, items_end) = (u64_of(fields, 0), u64_of(fields, 8));
                 let (entries, entries_end) = (u64_of(fields, 16), u64_of(fields, 24));
                 ensure!(
@@ -351,15 +348,12 @@ impl Inventories {
                 );
                 let item_count = ((items_end - items) / 8) as usize;
                 let item_offsets = entities.data(items, item_count * 8)?;
+                ensure!(
+                    (entries_end - entries).is_multiple_of(8),
+                    "a stack's entries are not whole"
+                );
                 for at in (entries..entries_end).step_by(8) {
-                    let Some((found, entry_row, 0)) = entities.locate(at) else {
-                        bail!("a stack's entries are outside the stack entry table");
-                    };
-                    ensure!(
-                        found == entry,
-                        "a stack's entries are outside the stack entry table"
-                    );
-                    let fields = entities.row(entry, entry_row);
+                    let fields = entities.data(at, 8)?;
                     let index = u16::from_le_bytes([fields[0], fields[1]]) as usize;
                     ensure!(
                         index < item_count,
@@ -370,7 +364,7 @@ impl Inventories {
                         out.stacked.insert(
                             item,
                             Stacked {
-                                entry: entry_row,
+                                entry: at,
                                 amount: u32_of(fields, tables::STACK_ENTRY_AMOUNT),
                             },
                         );
@@ -379,18 +373,12 @@ impl Inventories {
             }
         }
 
-        if let (Some(member), Some(member_data)) =
-            (table(tables::MEMBER), table(tables::MEMBER_DATA))
-        {
+        if let Some(member) = table(tables::MEMBER) {
             for (row, item) in entities.owned_rows(member) {
                 let target = u64_of(entities.row(member, row), 0);
-                if let Some((found, data_row, 0)) = entities.locate(target) {
-                    if found == member_data {
-                        let inventory = u64_of(entities.row(member_data, data_row), 0);
-                        if let Some(inventory) = entities.entity_at(inventory) {
-                            out.inventory_of.insert(item, inventory);
-                        }
-                    }
+                let inventory = u64_of(entities.data(target, 16)?, 0);
+                if let Some(inventory) = entities.entity_at(inventory) {
+                    out.inventory_of.insert(item, inventory);
                 }
             }
         }
@@ -626,8 +614,15 @@ pub fn read(globals: &Lsf, entities: &NewAge) -> Result<Party> {
         .and_then(|table| entities.owned_rows(table).next())
         .map(|(_, owner)| owner);
     let supply = entities.table(tables::SUPPLY);
+    let is_item: std::collections::HashSet<u32> = entities
+        .table(tables::ITEM)
+        .map(|t| entities.owned_rows(t).map(|(_, owner)| owner).collect())
+        .unwrap_or_default();
     let mut held: HashMap<Holder, Vec<Item>> = HashMap::new();
     for &item in inventories.inventory_of.keys() {
+        if !is_item.contains(&item) {
+            continue;
+        }
         let Some((owner, in_container)) =
             inventories.holder(item, |e| members.contains(&e) || Some(e) == chest)
         else {
@@ -796,12 +791,8 @@ pub fn set_amount(entities: &mut NewAge, item: Uuid, amount: u32) -> Result<()> 
         .stacked
         .get(&index)
         .ok_or_else(|| anyhow!("item {item} is not in a stack"))?;
-    entities.set_row_u32(
-        tables::STACK_ENTRY,
-        stacked.entry,
-        tables::STACK_ENTRY_AMOUNT,
-        amount,
-    )
+    let at = stacked.entry + tables::STACK_ENTRY_AMOUNT as u64;
+    entities.set_data(at, &amount.to_le_bytes())
 }
 
 /// Sets the party's Inspiration points, up to the maximum the save already allows.
@@ -1126,6 +1117,23 @@ pub mod build {
                 row_len: 48,
                 rows: vec![vec![0; 48]],
                 owners: Some(vec![CHEST]),
+            },
+            // Every item has an item component; owners in entity order, as the game keeps
+            // them.
+            TableSpec {
+                name: tables::ITEM,
+                row_len: 1,
+                rows: vec![vec![0]; 8],
+                owners: Some(vec![
+                    HERO_GOLD,
+                    BAG,
+                    BAGGED_GOLD,
+                    TRADER_GOLD,
+                    ROPE,
+                    CAMPER_GOLD,
+                    POTIONS,
+                    APPLES,
+                ]),
             },
             // An apple is worth 3 camp supplies.
             TableSpec {

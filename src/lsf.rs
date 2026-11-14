@@ -742,6 +742,64 @@ impl Lsf {
         Ok(())
     }
 
+    /// Copies a node with everything under it, as the last child of `parent`, and returns the
+    /// copy. Every value is copied too, so changing the copy leaves the original as it was.
+    pub fn copy_node(&mut self, node: NodeId, parent: NodeId) -> Result<NodeId> {
+        let count = self.nodes.len();
+        ensure!((node as usize) < count, "there is no node {node}");
+        ensure!((parent as usize) < count, "there is no node {parent}");
+        // The node and its descendants, in file order. Parents come before children.
+        let mut inside = vec![false; count];
+        inside[node as usize] = true;
+        for i in node as usize + 1..count {
+            let p = self.nodes[i].parent;
+            if p >= 0 && inside[p as usize] {
+                inside[i] = true;
+            }
+        }
+        let mut new_index = vec![u32::MAX; count];
+        for i in (0..count).filter(|&i| inside[i]) {
+            let copy = self.nodes.len() as u32;
+            new_index[i] = copy;
+            let mut rec = self.nodes[i].clone();
+            rec.parent = match i == node as usize {
+                true => parent as i32,
+                false => new_index[rec.parent as usize] as i32,
+            };
+            self.nodes.push(rec);
+        }
+        let originals: Vec<AttrRec> = self
+            .attrs
+            .iter()
+            .filter(|a| inside[a.node as usize])
+            .cloned()
+            .collect();
+        for mut attr in originals {
+            let start = attr.offset as usize;
+            let bytes = self.values[start..start + attr.len as usize].to_vec();
+            ensure!(
+                self.values.len() + bytes.len() <= u32::MAX as usize,
+                "values section too large"
+            );
+            attr.offset = self.values.len() as u32;
+            self.values.extend_from_slice(&bytes);
+            attr.node = new_index[attr.node as usize];
+            self.attrs.push(attr);
+        }
+        let keys: Vec<KeyRec> = self
+            .keys
+            .iter()
+            .filter(|k| inside[k.node as usize])
+            .cloned()
+            .collect();
+        for mut key in keys {
+            key.node = new_index[key.node as usize];
+            self.keys.push(key);
+        }
+        self.rebuild_index();
+        Ok(new_index[node as usize])
+    }
+
     /// Where the node is, for people: `Root/Child[2]/Name`, with an index wherever a node has
     /// siblings of the same name.
     pub fn path(&self, node: NodeId) -> String {
@@ -1065,6 +1123,46 @@ mod tests {
         assert_eq!(again.node_count(), 2);
         assert_eq!(again.attr_count(), 2);
         assert!(again.remove_nodes(&[9]).is_err());
+    }
+
+    #[test]
+    fn a_copied_node_is_its_own() {
+        let mut lsf = Lsf::parse(&sample()).unwrap();
+        let mods = lsf.find(&["MetaData", "ModuleSettings", "Mods"]).unwrap();
+        let first = lsf.children(mods)[0];
+        let copy = lsf.copy_node(first, mods).unwrap();
+        let folder = lsf.attr(copy, "Folder").unwrap();
+        lsf.set_value(folder, &Value::Text("Copied".into()))
+            .unwrap();
+
+        let again = Lsf::parse(&lsf.write().unwrap()).unwrap();
+        let mods = again.find(&["MetaData", "ModuleSettings", "Mods"]).unwrap();
+        let folders: Vec<_> = again
+            .children(mods)
+            .iter()
+            .map(|&m| again.get(m, "Folder").unwrap())
+            .collect();
+        assert_eq!(
+            folders,
+            [
+                Value::Text("GustavX".into()),
+                Value::Text("Honour".into()),
+                Value::Text("Copied".into())
+            ]
+        );
+        let last = again.children(mods)[2];
+        assert_eq!(again.get(last, "Version64"), Some(Value::Int64(1 << 40)));
+        // A node with children copies them too.
+        let mut lsf = again;
+        let settings = lsf.find(&["MetaData", "ModuleSettings"]).unwrap();
+        let meta = lsf.root("MetaData").unwrap();
+        lsf.copy_node(settings, meta).unwrap();
+        let again = Lsf::parse(&lsf.write().unwrap()).unwrap();
+        let meta = again.root("MetaData").unwrap();
+        let copies: Vec<_> = again.children_named(meta, "ModuleSettings").collect();
+        assert_eq!(copies.len(), 2);
+        let mods = again.child(copies[1], "Mods").unwrap();
+        assert_eq!(again.children(mods).len(), 3);
     }
 
     #[test]

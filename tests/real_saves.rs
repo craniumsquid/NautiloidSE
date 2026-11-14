@@ -403,3 +403,60 @@ fn a_session_exports_a_real_save_that_reopens_with_its_changes() {
     }
     std::fs::remove_dir_all(&out).unwrap();
 }
+
+#[test]
+fn an_item_copied_into_an_inventory_reads_back_once_more() {
+    use nautiloid_save_editor::items;
+    for path in saves() {
+        let save = Save::open(&path).unwrap();
+        if save.support() != Support::Editable {
+            continue;
+        }
+        let mut globals = save.lsf(save::GLOBALS).unwrap();
+        let mut entities = NewAge::from_lsf(&globals).unwrap();
+        let before = party::read(&globals, &entities).unwrap();
+        // The first unstacked item a character carries outside any bag.
+        let Some((holder, item)) = before.inventories.iter().find_map(|inventory| {
+            let item = inventory
+                .items
+                .iter()
+                .find(|i| !i.stacked && !i.in_container)?;
+            Some((inventory.holder, item.clone()))
+        }) else {
+            continue;
+        };
+        let copy = items::copy_item(&mut globals, &mut entities, item.entity)
+            .unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
+        entities.store(&mut globals).unwrap();
+
+        // Written out and read again.
+        let globals = Lsf::parse(&globals.write().unwrap()).unwrap();
+        let entities = NewAge::from_lsf(&globals).unwrap();
+        let after = party::read(&globals, &entities).unwrap();
+        let held = |party: &party::Party| {
+            party
+                .inventories
+                .iter()
+                .find(|i| i.holder == holder)
+                .map(|i| i.items.clone())
+                .unwrap_or_default()
+        };
+        let (old, new) = (held(&before), held(&after));
+        assert_eq!(new.len(), old.len() + 1, "{}", path.display());
+        let added = new
+            .iter()
+            .find(|i| i.entity == copy)
+            .expect("the copy is held");
+        assert_eq!(added.stats, item.stats, "{}", path.display());
+        assert_eq!(after.characters, before.characters, "{}", path.display());
+        let others = |party: &party::Party| {
+            party
+                .inventories
+                .iter()
+                .filter(|i| i.holder != holder)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(others(&after), others(&before), "{}", path.display());
+    }
+}

@@ -230,6 +230,42 @@ Tables that look like the remaining Phase 2 targets, not yet decoded:
   with.
 - `game.party.v0.MemberComponent`, `game.camp.v1.ChestComponent`, `game.v0.PlayerComponent`.
 
+## Adding an item (research)
+
+What adding an item would have to touch, from an unstacked scroll in a character's pack:
+
+- **Where things sit in the entity data.** The data section is the `core.v0.Level` row,
+  the entity table (entity list first, then copies of identifiers that rows point at), the
+  tables, the owner lists, the owner map, and then about 750 KB of loose data that rows point
+  into: names, arrays, approval lists, inventory arrays. Every owner list is sorted by
+  entity index; the entity list is not sorted.
+- **The node tree.** A `Creator` under `Items/ItemFactory/Creators` (`Entity`,
+  `TemplateType`, `TemplateID`, and for `TemplateType` 0 a `UUID` of its own that appears
+  nowhere else) and an `Item` under `Items/ItemFactory/Items` in the same position
+  (`Translate`, `Flags`, `Level`, `Global`, `CurrentTemplate`, `Stats` and three empty
+  child nodes).
+- **Its own rows.** About forty component rows. Most can be shared with another item of the
+  same kind: their offsets point at template strings and arrays that are only read. Two
+  differ per item: `game.inventory.v0.MemberComponent` (an offset to a `MemberData`: an
+  offset to the inventory's identifier, then the slot number) and
+  `game.sight.v0.DataComponent` (sixteen bytes that look like an identifier).
+- **Its inventory.** `game.inventory.v1.ContainerComponent`: two pairs of offsets, to the
+  slot numbers (u16) and to offsets of `ContainerSlotData` (an offset to the item's
+  identifier, a u32 position, four bytes left over).
+- **Its owner.** The item's `game.v0.OwneeCurrentComponent` points at the owner, and the
+  owner's `IsCurrentOwner`, `IsLatestOwner` and `IsOriginalOwner` components each hold a
+  list of offsets to what it owns. The scroll was also on two hotbar slots.
+- **Not an item.** A character can be carried too: one sample has a corpse in Karlach's
+  pack, with a character creator and no `game.item.v0.ItemComponent`.
+
+The editor adds by appending: a new entity list with the new identifier at the end, each
+table that gains a row copied whole to the end with its owner list, and every new array or
+record at the end, pointed at. Nothing already in the data moves, so every existing offset
+still reads the same bytes. Whether the game accepts this is being tested with five saves:
+a copy of the scroll; the entity list moved with nothing added; a table moved and one value
+in it changed; the scroll's inventory records moved into the loose data; and the scroll's
+nodes copied in the tree with nothing in the entity data.
+
 ## Tried in the game
 
 All on build `4.1.1.7631656`, with copies of one manual save.
