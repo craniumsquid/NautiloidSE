@@ -118,6 +118,50 @@ fn inventory_lists_holders_and_changes_a_stack() {
 }
 
 #[test]
+fn mods_not_active_in_the_game_can_be_taken_off_the_list() {
+    use nautiloid_save_editor::saves::build::mod_uuid;
+    use nautiloid_save_editor::session::Session;
+    // The game's own layout: the profile's mod list beside its Savegames folder.
+    let root = temp_dir("mods");
+    let story = root.join("Public/Savegames/Story");
+    std::fs::create_dir_all(&story).unwrap();
+    sample_saves(&story);
+    let entry = |uuid: String| {
+        format!(
+            "<node id=\"ModuleShortDesc\"><attribute id=\"UUID\" type=\"guid\" value=\"{uuid}\"/></node>"
+        )
+    };
+    std::fs::write(
+        root.join("Public/modsettings.lsx"),
+        format!(
+            "<save><region id=\"ModuleSettings\"><node id=\"root\"><children><node id=\"Mods\"><children>{}{}</children></node></children></node></region></save>",
+            entry(mod_uuid(0).to_string().to_uppercase()),
+            entry(mod_uuid(1).to_string()),
+        ),
+    )
+    .unwrap();
+
+    let mut ui = Harness::new(Some(story.clone()), WINDOW);
+    ui.click("Shattered Sanctum - 8h 02m");
+    ui.click("Mods");
+    assert!(ui.sees("ADDED MODS (12)"));
+    assert!(ui.sees("Sample mod 1"));
+    assert!(ui.find_all("ACTIVE").len() >= 2);
+    assert!(ui.sees("NOT ACTIVE"));
+    ui.click("Remove the 10 not active in your game");
+    assert_eq!(ui.app.session().unwrap().changes().len(), 10);
+    assert!(ui.sees("REMOVED"));
+    ui.snapshot("14-mods");
+
+    ui.click("Export as a new save…");
+    ui.click("Export");
+    let exported =
+        Session::open(&story.join("Tav-1234__Shattered Sanctum - 8h 02m - Edited")).unwrap();
+    assert_eq!(exported.summary().mods, ["Sample mod 1", "Sample mod 2"]);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn exporting_an_honour_mode_save_says_it_is_untried() {
     let dir = temp_dir("honour");
     sample_saves(&dir);

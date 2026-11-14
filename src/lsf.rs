@@ -693,6 +693,55 @@ impl Lsf {
         self.set_bytes(attr, &bytes)
     }
 
+    /// Removes the given nodes, with everything under them and all their attributes. The
+    /// remaining nodes keep their order and are numbered again, so `NodeId`s held from before
+    /// no longer apply. Names that are no longer used stay in the name table, as harmless as
+    /// value bytes no attribute points at.
+    pub fn remove_nodes(&mut self, nodes: &[NodeId]) -> Result<()> {
+        let count = self.nodes.len();
+        let mut removed = vec![false; count];
+        for &node in nodes {
+            ensure!((node as usize) < count, "there is no node {node}");
+            removed[node as usize] = true;
+        }
+        // Parents come before their children, so one pass reaches every descendant.
+        for i in 0..count {
+            let parent = self.nodes[i].parent;
+            if parent >= 0 && removed[parent as usize] {
+                removed[i] = true;
+            }
+        }
+        let mut new_index = vec![u32::MAX; count];
+        let mut next = 0u32;
+        for i in 0..count {
+            if !removed[i] {
+                new_index[i] = next;
+                next += 1;
+            }
+        }
+        let mut kept = Vec::with_capacity(next as usize);
+        for (i, node) in self.nodes.iter().enumerate() {
+            if !removed[i] {
+                let mut node = node.clone();
+                if node.parent >= 0 {
+                    node.parent = new_index[node.parent as usize] as i32;
+                }
+                kept.push(node);
+            }
+        }
+        self.nodes = kept;
+        self.attrs.retain(|a| !removed[a.node as usize]);
+        for attr in &mut self.attrs {
+            attr.node = new_index[attr.node as usize];
+        }
+        self.keys.retain(|k| !removed[k.node as usize]);
+        for key in &mut self.keys {
+            key.node = new_index[key.node as usize];
+        }
+        self.rebuild_index();
+        Ok(())
+    }
+
     /// Where the node is, for people: `Root/Child[2]/Name`, with an index wherever a node has
     /// siblings of the same name.
     pub fn path(&self, node: NodeId) -> String {
@@ -982,6 +1031,40 @@ mod tests {
             again.get(last, "Folder"),
             Some(Value::Text("Honour".into()))
         );
+    }
+
+    #[test]
+    fn removed_nodes_go_with_what_is_under_them() {
+        let mut lsf = Lsf::parse(&sample()).unwrap();
+        let mods = lsf.find(&["MetaData", "ModuleSettings", "Mods"]).unwrap();
+        let first = lsf.children(mods)[0];
+        lsf.remove_nodes(&[first]).unwrap();
+
+        let again = Lsf::parse(&lsf.write().unwrap()).unwrap();
+        assert_eq!(again.node_count(), 5);
+        assert_eq!(again.attr_count(), 4);
+        let mods = again.find(&["MetaData", "ModuleSettings", "Mods"]).unwrap();
+        let left: Vec<_> = again
+            .children(mods)
+            .iter()
+            .map(|&m| again.get(m, "Folder").unwrap())
+            .collect();
+        assert_eq!(left, [Value::Text("Honour".into())]);
+        let meta = again.root("MetaData").unwrap();
+        assert_eq!(
+            again.get(meta, "LeaderName"),
+            Some(Value::Text("Nelthryiis".into()))
+        );
+        assert!(again.root("Empty").is_some());
+
+        // Removing a node removes everything below it.
+        let settings = again.find(&["MetaData", "ModuleSettings"]).unwrap();
+        let mut again = again;
+        again.remove_nodes(&[settings]).unwrap();
+        let mut again = Lsf::parse(&again.write().unwrap()).unwrap();
+        assert_eq!(again.node_count(), 2);
+        assert_eq!(again.attr_count(), 2);
+        assert!(again.remove_nodes(&[9]).is_err());
     }
 
     #[test]

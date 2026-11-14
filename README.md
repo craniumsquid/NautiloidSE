@@ -33,7 +33,11 @@ Each of these has been changed in a save that then loaded in the game (build
 a level-up or a change of gold there is the same field as a party member's but has not been
 tried.
 
-The mod list comes next.
+Newest, and **not yet tried in the game**:
+
+- **Mods**: the mods the save asks for, marked by whether your game has them active, with
+  a way to take one off the list once it is no longer installed, so the game stops
+  warning about it.
 
 Saves from before Patch 8 are listed but can't be edited.
 

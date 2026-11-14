@@ -79,7 +79,13 @@ Everything is under `MetaData/MetaData`:
 
 - `GameVersions/GameVersion`: the game version text.
 - `ModuleSettings/Mods/ModuleShortDesc`: one per mod, with `Folder`, `Name`, `UUID`, `MD5`,
-  `Version64` and `PublishHandle`. All eleven samples are modded.
+  `Version64` and `PublishHandle`. All the samples are modded. `Globals.lsf` and every level
+  cache carry the same list, under a `ModuleSettings/ModuleSettings/Mods` root. The editor
+  takes a removed mod out of all of them. **Not yet tried in the game.**
+- The mods the game has active are in the profile's `modsettings.lsx`, beside its
+  `Savegames` folder: `PlayerProfiles/<profile>/modsettings.lsx`, an XML file of
+  `ModuleShortDesc` nodes. The editor reads only each entry's `UUID`, or its `Folder` if it
+  has none.
 - `Difficulty` (a byte), `Rulesets` (UUIDs; present when a preset is in use, the Honour save
   has two) and `CustomRulesetValues` (filled in when the rules are custom).
 - `SaveGameType`: 0 for a manual save, 2 for an autosave, 3 for the Honour Mode save.

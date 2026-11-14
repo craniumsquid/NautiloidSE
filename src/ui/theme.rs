@@ -44,6 +44,7 @@ pub const CORAL_BG: Color32 = Color32::from_rgb(58, 27, 21);
 pub const CORAL_LINE: Color32 = Color32::from_rgb(124, 61, 49);
 /// Things that are fine.
 pub const FINE: Color32 = Color32::from_rgb(146, 204, 150);
+pub const FINE_BG: Color32 = Color32::from_rgb(28, 44, 30);
 /// Text on a filled accent button.
 pub const ON_ACCENT: Color32 = Color32::from_rgb(31, 22, 8);
 

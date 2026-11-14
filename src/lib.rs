@@ -14,6 +14,7 @@
 pub mod diff;
 pub mod lsf;
 pub mod lspk;
+pub mod mods;
 pub mod newage;
 pub mod party;
 pub mod save;

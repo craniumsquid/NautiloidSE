@@ -11,6 +11,7 @@ pub mod changes;
 pub mod dialogs;
 pub mod info;
 pub mod inventory;
+pub mod mods;
 pub mod party;
 pub mod theme;
 pub mod thumbs;
@@ -59,17 +60,25 @@ pub enum Tab {
     Party,
     Inventory,
     Approval,
+    Mods,
     Info,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [Tab::Party, Tab::Inventory, Tab::Approval, Tab::Info];
+    pub const ALL: [Tab; 5] = [
+        Tab::Party,
+        Tab::Inventory,
+        Tab::Approval,
+        Tab::Mods,
+        Tab::Info,
+    ];
 
     /// The tab a field is edited on.
     pub fn of(field: Field) -> Tab {
         match field {
             Field::Approval(..) => Tab::Approval,
             Field::Amount(..) => Tab::Inventory,
+            Field::Mod(_) => Tab::Mods,
             _ => Tab::Party,
         }
     }
@@ -79,6 +88,7 @@ impl Tab {
             Tab::Party => "Party",
             Tab::Inventory => "Inventory",
             Tab::Approval => "Approval",
+            Tab::Mods => "Mods",
             Tab::Info => "Save info",
         }
     }
@@ -481,6 +491,7 @@ impl EditorApp {
                                         Tab::Party => party::show(ui, session, actions),
                                         Tab::Inventory => inventory::show(ui, session, actions),
                                         Tab::Approval => approval::show(ui, session, actions),
+                                        Tab::Mods => mods::show(ui, session, actions),
                                         Tab::Info => info::show(ui, session, now),
                                     });
                             });
