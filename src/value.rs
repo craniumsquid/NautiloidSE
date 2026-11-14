@@ -311,17 +311,19 @@ fn exact<const N: usize>(bytes: &[u8]) -> Result<[u8; N]> {
     }
 }
 
-/// Text stored as UTF-8 with one terminating NUL and none inside.
+/// Text stored as UTF-8 with one terminating NUL.
+///
+/// A NUL inside is rare but real: the game writes `VersionHash` from a 32-character buffer,
+/// and a hash one character short leaves the buffer's own NUL in the text. It is kept, so
+/// that the text encodes back to the same bytes.
 fn decode_text(bytes: &[u8]) -> Result<String> {
     let Some((&0, body)) = bytes.split_last() else {
         bail!("text without a terminating NUL");
     };
-    ensure!(!body.contains(&0), "text with a NUL inside");
     Ok(std::str::from_utf8(body)?.to_owned())
 }
 
 fn encode_text(text: &str) -> Result<Vec<u8>> {
-    ensure!(!text.contains('\0'), "text can't contain NUL");
     let mut out = Vec::with_capacity(text.len() + 1);
     out.extend_from_slice(text.as_bytes());
     out.push(0);
@@ -589,7 +591,6 @@ mod tests {
         assert_eq!(encode(DataType::Bool.id(), &Value::Byte(30)).unwrap(), [30]);
         assert!(encode(DataType::Bool.id(), &Value::Byte(1)).is_err());
         assert!(decode(DataType::LSString.id(), b"no terminator").is_err());
-        assert!(decode(DataType::LSString.id(), b"two\0parts\0").is_err());
         assert!(decode(
             DataType::TranslatedString.id(),
             &[0, 0, 9, 0, 0, 0, b'h', 0]
@@ -598,7 +599,18 @@ mod tests {
         assert!(decode(60, &[]).is_err());
         assert!(encode(DataType::Int.id(), &Value::UInt(1)).is_err());
         assert!(encode(DataType::Vec3.id(), &Value::Floats(vec![1.0])).is_err());
-        assert!(encode(DataType::LSString.id(), &Value::Text("a\0b".into())).is_err());
+    }
+
+    #[test]
+    fn text_keeps_a_nul_inside() {
+        // As the game wrote a `VersionHash` one character short of its 32.
+        let stored = b"8b5baee79aaf1b05c77d6a94caa3bc1\0\0";
+        let value = decode(DataType::LSString.id(), stored).unwrap();
+        assert_eq!(
+            value,
+            Value::Text("8b5baee79aaf1b05c77d6a94caa3bc1\0".into())
+        );
+        assert_eq!(encode(DataType::LSString.id(), &value).unwrap(), stored);
     }
 
     #[test]
