@@ -149,6 +149,24 @@ every Patch 8 sample:
 | `game.inventory.v1.IsOwnedComponent` | 8 bytes | On an inventory: an offset to the entity identifier of its owner. An item inside a bag is in the bag's inventory, whose owner is the bag, so finding the character means following this up |
 | `game.action_resources.v1.Component` | 16 bytes | A pair of offsets to 64-byte entries: a resource identifier, a level, then the amount and the maximum as 64-bit floats. Action points, movement, spell slots and class resources appear here. The party has its own entity, the one that owns the `game.party.*` rows, and it holds three more: `c38dea32-f5cb-4e38-a341-eb3fa653fb3e` matches the Inspiration count the game shows, and `a24ca5e2-01e1-48fd-a4c8-79b8817f0a18` is 2 of 2, probably short rests |
 
+### Approval
+
+`game.approval.v0.Ratings` has a 48-byte row on each of the ten possible companions, met or
+not. It is three pairs of offsets, begin and end:
+
+1. A list of 8-byte offsets to entity identifiers: the characters approved of. In a game for
+   one player there is one, the player's character.
+2. An `i32` rating for each of those.
+3. A list of 16-byte identifiers that grows by one each time the rating moves: what has
+   already moved it, so that nothing counts twice.
+
+On a companion with no rating yet, every field is all ones.
+
+Found from two saves either side of one conversation with Shadowheart: her rating went from
+10 to 11 and the third list from one identifier to two. The editor changes the rating and
+leaves the third list alone. **Not yet tried in the game.** The range of −50 to 100 is the
+game's as generally reported, not something read from a save.
+
 Not every party member has all of this. A character played as an origin has an empty name
 in the character creation record (Gale, in the Honour Mode sample), and a game that has only
 just begun has no Inspiration resource yet.
@@ -159,7 +177,8 @@ just begun has no Inspiration resource yet.
   `game.party.v0.MemberComponent` and `game.v0.PlayerComponent`.
 - A recruited companion who is not in the party keeps a character creation record, a level,
   an entitled level, ability scores, an inventory and `game.recruit.v0.RecruitedByComponent`,
-  but has **no experience row**: the game keeps experience only for the party. On Patch 8
+  but has **no experience row**: the game keeps experience only for the party, and awards a
+  companion who joins enough to match it (it shows the award on screen). On Patch 8
   they also own `game.camp.v1.PresenceComponent`. The 8-hour sample has three (Wyll, Lae'zel
   and Gale); a Patch 4 sample has one at level 1 entitled to level 12.
 - So the editor's characters are the experience owners, then every other owner of a
@@ -175,8 +194,6 @@ gained, each with identifiers for the class, subclass and feat taken.
 
 Tables that look like the remaining Phase 2 targets, not yet decoded:
 
-- `game.approval.v0.Ratings` (48 bytes, six offsets): approval. Its values are in data the
-  row points at.
 - `game.inventory.v0.Stack`, `StackEntry`, `NewStackComponent`, `StackMemberComponent`,
   `ContainerComponent`, `ContainerSlotData`, `MemberComponent`: inventories and stacks.
 - `game.stats.v0.ClassesComponent` and the selector tables under `game.character_creation.*`:

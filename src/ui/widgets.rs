@@ -180,12 +180,12 @@ pub fn badge_at(ui: &Ui, pos: egui::Pos2, text: &str, color: Color32, fill: Colo
 /// differs from the save's.
 pub fn stepper(
     ui: &mut Ui,
-    value: u32,
-    range: RangeInclusive<u32>,
-    step: u32,
+    value: i32,
+    range: RangeInclusive<i32>,
+    step: i32,
     width: f32,
     changed: bool,
-) -> Option<u32> {
+) -> Option<i32> {
     let mut result = None;
     let outline = if changed {
         theme::CHANGED_LINE
@@ -301,6 +301,14 @@ pub fn clipped(ui: &mut Ui, text: &str, font: FontId, color: Color32) -> Respons
     ui.add(egui::Label::new(egui::RichText::new(text).font(font).color(color)).truncate())
 }
 
+/// -1234567 as "−1,234,567".
+pub fn signed(number: i64) -> String {
+    match number < 0 {
+        true => format!("−{}", grouped(number.unsigned_abs())),
+        false => grouped(number as u64),
+    }
+}
+
 /// 1234567 as "1,234,567".
 pub fn grouped(number: u64) -> String {
     let digits = number.to_string();
@@ -339,5 +347,7 @@ mod tests {
         assert_eq!(grouped(1_000), "1,000");
         assert_eq!(grouped(3_385), "3,385");
         assert_eq!(grouped(1_234_567), "1,234,567");
+        assert_eq!(super::signed(-12_345), "−12,345");
+        assert_eq!(super::signed(40), "40");
     }
 }

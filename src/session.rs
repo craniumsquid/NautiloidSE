@@ -21,9 +21,9 @@ const UNDO_LIMIT: usize = 200;
 const MERGE_WINDOW: f64 = 1.0;
 /// The most gold this editor will put in one stack. The game's top bar shows up to seven
 /// digits comfortably.
-pub const MAX_GOLD: u32 = 9_999_999;
+pub const MAX_GOLD: i32 = 9_999_999;
 /// The most experience this editor will set.
-pub const MAX_EXPERIENCE: u32 = 9_999_999;
+pub const MAX_EXPERIENCE: i32 = 9_999_999;
 
 /// One value that can be edited. Characters and gold stacks are named by position in the
 /// party as it was read.
@@ -39,6 +39,8 @@ pub enum Field {
     Gold(usize, usize),
     /// The party's Inspiration points.
     Inspiration,
+    /// One of a companion's approval ratings: the companion, then which rating.
+    Approval(usize, usize),
 }
 
 /// One difference between the save as opened and as it now stands.
@@ -56,8 +58,8 @@ pub struct Change {
 #[derive(Clone, Copy, Debug)]
 struct Step {
     field: Field,
-    before: u32,
-    after: u32,
+    before: i32,
+    after: i32,
 }
 
 /// A save that is open for editing.
@@ -120,18 +122,33 @@ fn summary_entries(members: &[PartyMember], characters: &[Character]) -> Vec<Opt
     entries
 }
 
-fn field_of(party: &Party, field: Field) -> Option<u32> {
+/// A count from the save as the number the session works in.
+fn signed(count: u32) -> i32 {
+    i32::try_from(count).unwrap_or(i32::MAX)
+}
+
+fn field_of(party: &Party, field: Field) -> Option<i32> {
     let character = |i: usize| party.characters.get(i);
     match field {
-        Field::Experience(c) => character(c)?.experience,
-        Field::LevelUps(c) => character(c).map(|c| c.entitled_level.saturating_sub(c.level)),
-        Field::Allocated(c, ability) => character(c)?.allocated?.get(ability).copied(),
-        Field::Gold(c, stack) => character(c)?.gold.get(stack).map(|g| g.amount),
-        Field::Inspiration => party.inspiration.map(|i| i.amount),
+        Field::Experience(c) => character(c)?.experience.map(signed),
+        Field::LevelUps(c) => {
+            character(c).map(|c| signed(c.entitled_level.saturating_sub(c.level)))
+        }
+        Field::Allocated(c, ability) => character(c)?.allocated?.get(ability).copied().map(signed),
+        Field::Gold(c, stack) => character(c)?.gold.get(stack).map(|g| signed(g.amount)),
+        Field::Inspiration => party.inspiration.map(|i| signed(i.amount)),
+        Field::Approval(c, which) => character(c)?.approval.get(which).map(|a| a.rating),
     }
 }
 
-fn set_field(party: &mut Party, field: Field, value: u32) {
+fn set_field(party: &mut Party, field: Field, value: i32) {
+    // Only approval can be below zero; the ranges keep the rest from it.
+    let count = value.max(0) as u32;
+    if let Field::Approval(c, which) = field {
+        party.characters[c].approval[which].rating = value;
+        return;
+    }
+    let value = count;
     match field {
         Field::Experience(c) => party.characters[c].experience = Some(value),
         Field::LevelUps(c) => {
@@ -149,6 +166,7 @@ fn set_field(party: &mut Party, field: Field, value: u32) {
                 inspiration.amount = value;
             }
         }
+        Field::Approval(..) => {}
     }
 }
 
@@ -226,12 +244,12 @@ impl Session {
 
     /// The field's value now, or `None` if this save has no such field (a character with no
     /// character creation record has no allocations; a new game has no Inspiration).
-    pub fn value(&self, field: Field) -> Option<u32> {
+    pub fn value(&self, field: Field) -> Option<i32> {
         field_of(&self.current, field)
     }
 
     /// The field's value in the save as opened.
-    pub fn original_value(&self, field: Field) -> Option<u32> {
+    pub fn original_value(&self, field: Field) -> Option<i32> {
         field_of(&self.original, field)
     }
 
@@ -240,22 +258,27 @@ impl Session {
     }
 
     /// The values the field can take.
-    pub fn range(&self, field: Field) -> RangeInclusive<u32> {
+    pub fn range(&self, field: Field) -> RangeInclusive<i32> {
         match field {
             Field::Experience(_) => 0..=MAX_EXPERIENCE,
             Field::LevelUps(c) => {
                 let level = self.original.characters.get(c).map_or(0, |c| c.level);
-                0..=party::MAX_LEVEL.saturating_sub(level)
+                0..=signed(party::MAX_LEVEL.saturating_sub(level))
             }
-            Field::Allocated(..) => 0..=party::MAX_ALLOCATED,
+            Field::Allocated(..) => 0..=signed(party::MAX_ALLOCATED),
             Field::Gold(..) => 1..=MAX_GOLD,
-            Field::Inspiration => 0..=self.original.inspiration.map_or(0, |i| i.max),
+            Field::Inspiration => 0..=signed(self.original.inspiration.map_or(0, |i| i.max)),
+            Field::Approval(..) => {
+                // The game's own range, widened to take in a rating a mod has put outside.
+                let now = self.original_value(field).unwrap_or(0);
+                party::APPROVAL_MIN.min(now)..=party::APPROVAL_MAX.max(now)
+            }
         }
     }
 
     /// Sets a field, clamped to its range. `time` is the current time in seconds, used to
     /// fold quick repeated edits to one field into a single step to undo.
-    pub fn set(&mut self, field: Field, value: u32, time: f64) {
+    pub fn set(&mut self, field: Field, value: i32, time: f64) {
         let Some(before) = self.value(field) else {
             return;
         };
@@ -340,6 +363,7 @@ impl Session {
                 fields.extend((0..party::ABILITIES.len()).map(|a| Field::Allocated(c, a)));
             }
             fields.extend((0..character.gold.len()).map(|s| Field::Gold(c, s)));
+            fields.extend((0..character.approval.len()).map(|a| Field::Approval(c, a)));
         }
         if self.original.inspiration.is_some() {
             fields.push(Field::Inspiration);
@@ -381,7 +405,27 @@ impl Session {
                 (name(c), what)
             }
             Field::Inspiration => ("Party".to_owned(), "Inspiration".to_owned()),
+            Field::Approval(c, which) => {
+                let ratings = self.original.characters.get(c).map(|c| &c.approval);
+                let what = match ratings {
+                    // With more than one player, say whose character it is of.
+                    Some(ratings) if ratings.len() > 1 => {
+                        format!("Approval of {}", self.name_of(ratings[which].of))
+                    }
+                    _ => "Approval".to_owned(),
+                };
+                (name(c), what)
+            }
         }
+    }
+
+    /// The name of the character with the entity `id`, for saying whom a rating is of.
+    pub fn name_of(&self, id: crate::value::Uuid) -> String {
+        self.original
+            .characters
+            .iter()
+            .find(|c| c.entity == id)
+            .map_or_else(|| "another character".to_owned(), Character::display_name)
     }
 
     /// The differences between the save as opened and as it now stands.
@@ -442,22 +486,29 @@ impl Session {
                 .value(change.field)
                 .ok_or_else(|| anyhow!("a changed field has no value"))?;
             let character = |c: usize| &self.original.characters[c];
+            let count = u32::try_from(value);
             match change.field {
                 Field::Experience(c) => {
-                    party::set_experience(&mut entities, character(c).entity, value)?
+                    party::set_experience(&mut entities, character(c).entity, count?)?
                 }
                 Field::LevelUps(c) => party::set_entitled_level(
                     &mut entities,
                     character(c).entity,
-                    character(c).level + value,
+                    character(c).level + count?,
                 )?,
                 Field::Allocated(c, ability) => {
-                    party::set_allocated(&mut entities, character(c).entity, ability, value)?
+                    party::set_allocated(&mut entities, character(c).entity, ability, count?)?
                 }
                 Field::Gold(c, stack) => {
-                    party::set_gold(&mut entities, character(c).gold[stack].item, value)?
+                    party::set_gold(&mut entities, character(c).gold[stack].item, count?)?
                 }
-                Field::Inspiration => party::set_inspiration(&mut entities, value)?,
+                Field::Inspiration => party::set_inspiration(&mut entities, count?)?,
+                Field::Approval(c, which) => party::set_approval(
+                    &mut entities,
+                    character(c).entity,
+                    character(c).approval[which].of,
+                    value,
+                )?,
             }
         }
         Ok(entities)
@@ -557,6 +608,7 @@ mod tests {
             level,
             entitled_level: level,
             experience: Some(experience),
+            approval: Vec::new(),
             abilities: [10; 6],
             allocated: None,
             gold: Vec::new(),
@@ -761,9 +813,27 @@ mod tests {
         session.set(Field::Gold(2, 0), 900, 30.0);
         assert_eq!(session.changes()[0].who, "Gale");
 
+        // Approval is the one value that goes below zero.
+        assert_eq!(session.value(Field::Approval(2, 0)), Some(10));
+        assert_eq!(session.range(Field::Approval(2, 0)), -50..=100);
+        session.set(Field::Approval(2, 0), -500, 40.0);
+        assert_eq!(session.value(Field::Approval(2, 0)), Some(-50));
+        session.set(Field::Approval(2, 0), -20, 50.0);
+        let change = session.changes().pop().unwrap();
+        assert_eq!(
+            (change.who.as_str(), change.what.as_str()),
+            ("Gale", "Approval")
+        );
+        assert_eq!(
+            (change.before.as_str(), change.after.as_str()),
+            ("10", "-20")
+        );
+        assert_eq!(session.value(Field::Approval(1, 0)), None, "no rating yet");
+
         let exported = session.export(&dir, "Camp edit").unwrap();
         let reopened = Session::open(&exported).unwrap();
         let gale = &reopened.party().characters[2];
+        assert_eq!(gale.approval[0].rating, -20);
         assert_eq!((gale.level, gale.entitled_level), (4, 5));
         assert_eq!(gale.allocated, Some([0, 5, 6, 9, 2, 4]));
         assert_eq!(gale.gold_total(), 900);

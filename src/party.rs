@@ -61,6 +61,11 @@ pub mod tables {
     pub const MEMBER_DATA: &str = "game.inventory.v0.MemberData";
     /// Rows of 8 bytes, one per inventory: an offset to its owner's entity identifier.
     pub const INVENTORY_OWNER: &str = "game.inventory.v1.IsOwnedComponent";
+    /// Rows of 48 bytes, on a companion: three pairs of offsets. The first is to a list of
+    /// offsets to the entities approved of (the players' characters), the second to an i32
+    /// rating for each, the third to 16-byte identifiers, one for each thing that has moved
+    /// the rating. Every field is all ones on a companion who has no rating yet.
+    pub const APPROVAL: &str = "game.approval.v0.Ratings";
 }
 
 pub const ABILITIES: [&str; 6] = [
@@ -79,6 +84,9 @@ pub const MAX_ALLOCATED: u32 = 22;
 /// The highest level this editor will entitle a character to. The game stops at 12; mods
 /// raise that to 20.
 pub const MAX_LEVEL: u32 = 20;
+/// The range the game keeps approval in.
+pub const APPROVAL_MIN: i32 = -50;
+pub const APPROVAL_MAX: i32 = 100;
 /// The template of the gold item.
 pub const GOLD_TEMPLATE: &str = "1c3c9c74-34a1-4685-989e-410dc080be6f";
 /// The resource on the party's entity that counts Inspiration.
@@ -93,6 +101,14 @@ pub struct GoldStack {
     pub amount: u32,
     /// Whether it is inside a bag or other container the character carries.
     pub in_container: bool,
+}
+
+/// What a companion thinks of one of the players' characters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Approval {
+    /// The character approved of.
+    pub of: Uuid,
+    pub rating: i32,
 }
 
 /// A character the player controls: a party member, or a companion waiting at camp.
@@ -118,6 +134,9 @@ pub struct Character {
     /// characters that have a character creation record.
     pub allocated: Option<[u32; 6]>,
     pub gold: Vec<GoldStack>,
+    /// A companion's approval of each player's character: one entry in a game for one
+    /// player. Empty for the player's own character and a companion not yet met.
+    pub approval: Vec<Approval>,
 }
 
 impl Character {
@@ -365,6 +384,40 @@ fn resource(entities: &NewAge, entity: u32, id: Uuid) -> Result<Option<u64>> {
     Ok(None)
 }
 
+fn exact4(bytes: &[u8]) -> [u8; 4] {
+    [bytes[0], bytes[1], bytes[2], bytes[3]]
+}
+
+/// A companion's ratings: for each, the character approved of and where the rating is in
+/// the data section.
+fn approvals(entities: &NewAge, companion: u32) -> Result<Vec<(Uuid, u64)>> {
+    let Some(table) = entities.table(tables::APPROVAL) else {
+        return Ok(Vec::new());
+    };
+    let Some(row) = entities.row_of(table, companion) else {
+        return Ok(Vec::new());
+    };
+    let fields = entities.row(table, row);
+    let (of, of_end) = (u64_of(fields, 0), u64_of(fields, 8));
+    let (ratings, ratings_end) = (u64_of(fields, 16), u64_of(fields, 24));
+    if of == u64::MAX {
+        return Ok(Vec::new());
+    }
+    ensure!(
+        of <= of_end && ratings <= ratings_end && (of_end - of) / 8 == (ratings_end - ratings) / 4,
+        "a companion's approval lists do not match"
+    );
+    let mut out = Vec::new();
+    for i in 0..(of_end - of) / 8 {
+        let target = u64_of(entities.data(of + i * 8, 8)?, 0);
+        let entity = entities
+            .entity_at(target)
+            .ok_or_else(|| anyhow!("an approval rating is of no entity in the save"))?;
+        out.push((entities.entity_id(entity), ratings + i * 4));
+    }
+    Ok(out)
+}
+
 fn inspiration_id() -> Uuid {
     Uuid::parse(INSPIRATION).unwrap_or(Uuid([0; 16]))
 }
@@ -461,6 +514,15 @@ pub fn read(globals: &Lsf, entities: &NewAge) -> Result<Party> {
             abilities,
             allocated,
             gold: Vec::new(),
+            approval: approvals(entities, index)?
+                .into_iter()
+                .map(|(of, at)| {
+                    Ok(Approval {
+                        of,
+                        rating: i32::from_le_bytes(exact4(entities.data(at, 4)?)),
+                    })
+                })
+                .collect::<Result<_>>()?,
         });
     }
 
@@ -589,6 +651,16 @@ pub fn set_allocated(
         ability + 1,
         points,
     )
+}
+
+/// Sets what a companion thinks of the character `of`, as [`Approval::of`] gives it.
+pub fn set_approval(entities: &mut NewAge, companion: Uuid, of: Uuid, rating: i32) -> Result<()> {
+    let index = character_index(entities, companion)?;
+    let (_, at) = approvals(entities, index)?
+        .into_iter()
+        .find(|(id, _)| *id == of)
+        .ok_or_else(|| anyhow!("{companion} has no approval rating of {of}"))?;
+    entities.set_data(at, &rating.to_le_bytes())
 }
 
 /// Sets the amount of a gold stack, named by its item as [`GoldStack::item`] gives it.
@@ -783,6 +855,26 @@ pub mod build {
                     .collect(),
                 owners: None,
             },
+            // The companion at camp rates the hero at 10; the one in the party has no
+            // rating yet.
+            TableSpec {
+                name: tables::APPROVAL,
+                row_len: 48,
+                rows: vec![vec![0; 48], vec![0xff; 48]],
+                owners: Some(vec![CAMPER, COMPANION]),
+            },
+            TableSpec {
+                name: "test.v0.ApprovalOf",
+                row_len: 8,
+                rows: vec![vec![0; 8]],
+                owners: None,
+            },
+            TableSpec {
+                name: "test.v0.ApprovalRatings",
+                row_len: 4,
+                rows: vec![words(&[10])],
+                owners: None,
+            },
             TableSpec {
                 name: tables::CAMP_SUPPLIES,
                 row_len: 4,
@@ -894,6 +986,13 @@ pub mod build {
             point(tables::CREATION, row, 72, allocations);
             point(tables::CREATION, row, 80, allocations + 28);
         }
+        let of = at(&fixed, "test.v0.ApprovalOf", 0);
+        point("test.v0.ApprovalOf", 0, 0, entity(&fixed, HERO));
+        point(tables::APPROVAL, 0, 0, of);
+        point(tables::APPROVAL, 0, 8, of + 8);
+        let ratings = at(&fixed, "test.v0.ApprovalRatings", 0);
+        point(tables::APPROVAL, 0, 16, ratings);
+        point(tables::APPROVAL, 0, 24, ratings + 4);
         // The party's resources are the first two entries, the hero's the third.
         let entries = at(&fixed, "test.v0.ResourceEntries", 0);
         point(tables::RESOURCES, 0, 0, entries);
@@ -997,6 +1096,27 @@ mod tests {
         );
         assert_eq!(camper.allocated, Some([0, 5, 6, 7, 2, 4]));
         assert_eq!(camper.gold_total(), 120);
+
+        // Approval is a companion's, of the player's character.
+        assert_eq!(
+            camper.approval,
+            [Approval {
+                of: uuid(HERO),
+                rating: 10
+            }]
+        );
+        assert!(hero.approval.is_empty());
+        assert!(companion.approval.is_empty(), "no rating yet");
+    }
+
+    #[test]
+    fn approval_can_be_set_below_zero() {
+        let globals = sample_globals();
+        let mut entities = sample_entities();
+        set_approval(&mut entities, uuid(CAMPER), uuid(HERO), -20).unwrap();
+        assert!(set_approval(&mut entities, uuid(COMPANION), uuid(HERO), 5).is_err());
+        let after = read(&globals, &NewAge::parse(entities.to_bytes()).unwrap()).unwrap();
+        assert_eq!(after.characters[2].approval[0].rating, -20);
     }
 
     #[test]

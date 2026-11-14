@@ -34,6 +34,7 @@ A <save> is a .lsv file or the save folder that holds one.
       Inspiration.
   edit <save> <folder> <name> [--xp WHO=N,...] [--level-up WHO,...]
        [--ability WHO:ABILITY=POINTS,...] [--gold WHO=N,...] [--inspiration N]
+       [--approval WHO=N,...]
       Write a copy of the save as a new save called <name> under <folder>, with the party
       changed. WHO is a character's name or the start of their entity identifier.
       --xp sets total experience. --level-up entitles a character to one more level, which
@@ -45,6 +46,8 @@ A <save> is a .lsv file or the save folder that holds one.
       A table's rows as 32-bit numbers, with the entity each belongs to.
   entity <save> <file.lsf> <entity>
       Every row an entity owns, table by table.
+  at <save> <file.lsf> <offset> [--len N]
+      What a row's offset points at: the table and row there, and the bytes from it.
   set <save> <folder> <name> --u32 TABLE:ENTITY:OFFSET[@INDEX]=VALUE,... [--file FILE]
       Write a copy of the save as a new save called <name> under <folder>, with 32-bit
       fields of its entity data changed. ENTITY is the owner's identifier and OFFSET the
@@ -150,13 +153,21 @@ fn run(raw: &[String]) -> Result<()> {
             &Args::parse(
                 rest,
                 &[],
-                &["xp", "level-up", "ability", "gold", "inspiration"],
+                &[
+                    "xp",
+                    "level-up",
+                    "ability",
+                    "gold",
+                    "inspiration",
+                    "approval",
+                ],
             )?,
             out,
         ),
         "tables" => tables(&Args::parse(rest, &[], &[])?, out),
         "rows" => rows(&Args::parse(rest, &[], &["limit"])?, out),
         "entity" => entity(&Args::parse(rest, &[], &[])?, out),
+        "at" => at(&Args::parse(rest, &[], &["len"])?, out),
         "set" => set(&Args::parse(rest, &[], &["file", "u32"])?, out),
         "check" => check(&Args::parse(rest, &[], &[])?, out),
         "extract" => extract(&Args::parse(rest, &[], &[])?),
@@ -568,6 +579,10 @@ fn print_party(party: &Party, out: &mut impl Write) -> Result<()> {
                 party::ABILITY_BASE
             )?;
         }
+        if !c.approval.is_empty() {
+            let ratings: Vec<String> = c.approval.iter().map(|a| a.rating.to_string()).collect();
+            writeln!(out, "    approval {}", ratings.join(", "))?;
+        }
         let stacks: Vec<String> = c
             .gold
             .iter()
@@ -636,7 +651,8 @@ fn edit(args: &Args, out: &mut impl Write) -> Result<()> {
     args.expect(
         3,
         "edit <save> <folder> <name> [--xp WHO=N,...] [--level-up WHO,...] \
-         [--ability WHO:ABILITY=POINTS,...] [--gold WHO=N,...] [--inspiration N]",
+         [--ability WHO:ABILITY=POINTS,...] [--gold WHO=N,...] [--inspiration N] \
+         [--approval WHO=N,...]",
     )?;
     let save = Save::open(Path::new(&args.positional[0]))?;
     if let Support::ReadOnly(why) = save.support() {
@@ -689,6 +705,21 @@ fn edit(args: &Args, out: &mut impl Write) -> Result<()> {
     }
     if let Some(amount) = args.get("inspiration") {
         party::set_inspiration(&mut entities, number(amount)?)?;
+    }
+    for item in list("approval") {
+        let (name, rating) = item
+            .split_once('=')
+            .ok_or_else(|| anyhow!("--approval takes WHO=N"))?;
+        let rating: i32 = rating
+            .parse()
+            .with_context(|| format!("{rating} is not a number"))?;
+        let companion = who(&before, name)?;
+        // The first rating is of the first player's character; a game for one has no other.
+        let first = companion
+            .approval
+            .first()
+            .ok_or_else(|| anyhow!("{name} has no approval rating to change"))?;
+        party::set_approval(&mut entities, companion.entity, first.of, rating)?;
     }
 
     entities.store(&mut globals)?;
@@ -783,6 +814,34 @@ fn rows(args: &Args, out: &mut impl Write) -> Result<()> {
             table.rows - limit
         )?;
     }
+    Ok(())
+}
+
+fn at(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(3, "at <save> <file.lsf> <offset> [--len N]")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let entities = NewAge::from_lsf(&save.lsf(&args.positional[1])?)?;
+    let offset: u64 = args.positional[2]
+        .parse()
+        .map_err(|_| anyhow!("{} is not an offset", args.positional[2]))?;
+    let len = args.number("len")?.unwrap_or(32);
+    match entities.locate(offset) {
+        Some((table, row, within)) => {
+            let table = &entities.tables()[table];
+            writeln!(
+                out,
+                "{} row {row} of {} ({} bytes each), {within} bytes in",
+                table.name, table.rows, table.row_len
+            )?;
+            if let Some(entity) = entities.entity_at(offset) {
+                writeln!(out, "entity {}", entities.entity_id(entity))?;
+            }
+        }
+        None => writeln!(out, "in no table")?,
+    }
+    let bytes = entities.data(offset, len)?;
+    writeln!(out, "{}", hex(bytes))?;
+    writeln!(out, "{}", row_text(bytes))?;
     Ok(())
 }
 

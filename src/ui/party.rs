@@ -35,8 +35,8 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
         ui.label(egui::RichText::new("At camp").font(theme::display(22.0)));
         ui.label(
             egui::RichText::new(
-                "Companions who are not in the party. The game keeps experience only for the \
-                 party, so there is none to change here.",
+                "Companions who are not in the party. They have no experience of their own to \
+                 change: the game awards it when they join, to match the party.",
             )
             .color(theme::MUTED),
         );
@@ -65,11 +65,11 @@ fn cards(ui: &mut Ui, session: &Session, characters: &[usize], actions: &mut Vec
 }
 
 /// A stepper for `field` with a button to put it back when it has changed.
-fn field_stepper(
+pub fn field_stepper(
     ui: &mut Ui,
     session: &Session,
     field: Field,
-    step: u32,
+    step: i32,
     width: f32,
     actions: &mut Vec<Action>,
 ) {
@@ -82,7 +82,7 @@ fn field_stepper(
     }
     if changed {
         let original = session.original_value(field).unwrap_or(value);
-        let tip = format!("Put back {}", grouped(original as u64));
+        let tip = format!("Put back {}", widgets::signed(original as i64));
         if widgets::icon_button(ui, "⟲", &tip).clicked() {
             actions.push(Action::Revert(field));
         }
@@ -192,7 +192,7 @@ fn character_card(ui: &mut Ui, session: &Session, index: usize, actions: &mut Ve
             n => format!(
                 "The game will offer level {}.",
                 (1..=n)
-                    .map(|i| (character.level + i).to_string())
+                    .map(|i| (character.level as i32 + i).to_string())
                     .collect::<Vec<_>>()
                     .join(", then ")
             ),

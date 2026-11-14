@@ -5,6 +5,7 @@
 //! window, file dialogs and the system file manager are behind [`Platform`], which lets the
 //! tests drive the whole interface without a screen.
 
+pub mod approval;
 pub mod browser;
 pub mod changes;
 pub mod dialogs;
@@ -55,15 +56,25 @@ pub struct Options {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
     Party,
+    Approval,
     Info,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 2] = [Tab::Party, Tab::Info];
+    pub const ALL: [Tab; 3] = [Tab::Party, Tab::Approval, Tab::Info];
+
+    /// The tab a field is edited on.
+    pub fn of(field: Field) -> Tab {
+        match field {
+            Field::Approval(..) => Tab::Approval,
+            _ => Tab::Party,
+        }
+    }
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Party => "Party",
+            Tab::Approval => "Approval",
             Tab::Info => "Save info",
         }
     }
@@ -81,7 +92,7 @@ pub enum Action {
     SetFolder(PathBuf),
     SelectCampaign(String),
     Tab(Tab),
-    Set(Field, u32),
+    Set(Field, i32),
     Revert(Field),
     RevertAll,
     Undo,
@@ -373,9 +384,9 @@ impl EditorApp {
                 );
                 ui.add_enabled_ui(!modal, |ui| {
                     ui.spacing_mut().item_spacing.y = 4.0;
-                    let changes = session.changes().len();
+                    let changes = session.changes();
                     for tab in Tab::ALL {
-                        let count = if tab == Tab::Party { changes } else { 0 };
+                        let count = changes.iter().filter(|c| Tab::of(c.field) == tab).count();
                         if tab_button(ui, tab.label(), self.tab == tab, count).clicked() {
                             actions.push(Action::Tab(tab));
                         }
@@ -383,6 +394,7 @@ impl EditorApp {
                     ui.add_space(14.0);
                     save_card(ui, session, &mut self.thumbs);
                     ui.add_space(10.0);
+                    let changes = changes.len();
                     if changes > 0 {
                         ui.label(
                             egui::RichText::new(format!(
@@ -463,6 +475,7 @@ impl EditorApp {
                                     })
                                     .show(ui, |ui| match self.tab {
                                         Tab::Party => party::show(ui, session, actions),
+                                        Tab::Approval => approval::show(ui, session, actions),
                                         Tab::Info => info::show(ui, session, now),
                                     });
                             });

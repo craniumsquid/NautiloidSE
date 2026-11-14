@@ -47,6 +47,30 @@ fn opens_a_save_and_shows_the_party() {
 }
 
 #[test]
+fn approval_has_its_own_tab_and_can_go_below_zero() {
+    use nautiloid_save_editor::session::Field;
+    let (dir, mut ui) = open_sample("approval");
+    ui.click("Approval");
+    assert!(ui.sees("What each companion thinks of your character, from −50 to 100."));
+    assert!(ui.sees("Gale"));
+    assert!(ui.sees("At camp"));
+    // Eleven steps down from 10.
+    for _ in 0..11 {
+        ui.click("−");
+    }
+    assert_eq!(
+        ui.app.session().unwrap().value(Field::Approval(2, 0)),
+        Some(-1)
+    );
+    assert!(ui.sees("10 ➡ −1") || ui.sees("−1"));
+    ui.snapshot("12-approval");
+    // The change is counted on this tab, not on Party.
+    ui.click("Party");
+    assert_eq!(ui.app.session().unwrap().changes().len(), 1);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn exporting_an_honour_mode_save_says_it_is_untried() {
     let dir = temp_dir("honour");
     sample_saves(&dir);
