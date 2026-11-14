@@ -103,10 +103,11 @@ Since then: companions at camp, the Inventory tab and the Approval tab. What has
 not been tried in the game:
 
 - Tried, on two campaigns and from the Windows app: experience, level-ups, ability points,
-  gold and Inspiration for a party member.
-- Not yet tried: any change to a companion at camp, the amount of a stack other than gold,
-  and approval. Each is either the same field as one that has been tried or was decoded
-  from the game's own change, but none has been loaded in the game.
+  gold and Inspiration for a party member; approval; the amount of a stack of potions and of
+  a stack of food, with the camp supplies total following the food; and ability points for
+  a companion at camp, which were kept when that companion joined the party.
+- Not yet tried: a level-up or a change of gold for a companion at camp. Both are the same
+  fields as a party member's.
 
 Next is the Mods tab.
 

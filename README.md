@@ -23,15 +23,15 @@ The party, and the companions waiting at camp:
 - **Gold**, for a character who already carries some.
 - **Inspiration**, once the party has earned a point.
 
-Each of these has been changed for a party member in a save that then loaded in the game
-(build `4.1.1.7631656`) with the new value.
-
-Newer, and **not yet tried in the game**:
-
 - **Inventory**: how many each stack holds, for every character and the camp chest. Food
-  shows the camp supplies it is worth. Items go by the game's internal names for now.
+  shows the camp supplies it is worth, and the game's supplies total follows it. Items go
+  by the game's internal names for now.
 - **Approval**: what each companion thinks of your character.
-- The same party changes made to a companion at camp.
+
+Each of these has been changed in a save that then loaded in the game (build
+`4.1.1.7631656`) with the new value. For a companion at camp that is so for ability points;
+a level-up or a change of gold there is the same field as a party member's but has not been
+tried.
 
 The mod list comes next.
 

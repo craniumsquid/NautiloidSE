@@ -167,7 +167,9 @@ every Patch 8 sample:
   others (773 against 782, 217 against 177), so the game's rule is close to this but not
   this.
 
-The editor changes the amount of any stack. That is **tried in the game for gold only**.
+The editor changes the amount of any stack. Tried in the game for gold, a stack of
+potions and a stack of food: the amounts hold, and the camp supplies total follows the food
+(see Tried in the game).
 
 ### Approval
 
@@ -184,8 +186,9 @@ On a companion with no rating yet, every field is all ones.
 
 Found from two saves either side of one conversation with Shadowheart: her rating went from
 10 to 11 and the third list from one identifier to two. The editor changes the rating and
-leaves the third list alone. **Not yet tried in the game.** The range of −50 to 100 is the
-game's as generally reported, not something read from a save.
+leaves the third list alone. Tried in the game: a rating set to 50 shows as "High (50)" on
+the character sheet and is still 50 in the next save the game writes. The range of −50 to
+100 is the game's as generally reported, not something read from a save.
 
 Not every party member has all of this. A character played as an origin has an empty name
 in the character creation record (Gale, in the Honour Mode sample), and a game that has only
@@ -242,6 +245,7 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | Points allocated to Strength at character creation: 0 → 7 for one character, 7 → 9 for another | Loads. Strength shows 15 (was 8) and 20 (was 18) |
 | One character's experience set to 7100 and entitled level 5 → 6; the party's Inspiration 6 → 3; that character's gold stack 3,385 → 5,000 | Loads. A level-up is offered, Inspiration shows 3, and gold shows 5,000 on that character and in the party total |
 | Made in the app on Windows, on a Dark Urge character in another campaign: points allocated to Strength 0 → 2, Intelligence 0 → 2 and Wisdom 2 → 8; gold stack 429 → 1,429 | Loads with the changes in place. The file is byte for byte what this code writes on Linux for the same changes |
+| Made in the app: two companions' approval 0 → 50; a companion at camp's Strength points 0 → 18; a stack of healing potions 1 → 21; a stack of fish in the camp chest, worth 4 camp supplies each, 2 → 14 | Loads. The character sheet shows approval as "High (50)". Camp supplies show 335, up from 287 by the 48 the twelve fish are worth. After the companion is swapped into the party and the game saves again, that save has approval at 50, the stacks at 21 and 14, the companion's Strength at 26 with the 18 points kept, and experience awarded to them to match the party |
 
 Every failure looks the same: the save loads to 100%, drops to the title screen, and shows
 "Server shutting down". Other saves load normally afterwards.
@@ -258,10 +262,10 @@ sticks depends on whether the game keeps the value or works it out again from so
 - Where the bonuses on top of the allocated points are recorded (the +2 and +1 chosen at
   creation, and ability improvements taken at level-up).
 - Exactly which food the camp supplies total counts. See Items.
-- Whether a companion at camp keeps a change to their ability points, entitled level or gold
-  when they join the party, and whether approval and item amounts other than gold stick.
-  They are the same fields as ones that do, or decoded from the game's own change, but have
-  not been tried.
+- Whether a companion at camp keeps a change to their entitled level or gold when they join
+  the party. Ability points do (see Tried in the game); the others are the same fields as
+  a party member's but have not been tried on a companion at camp.
+- The names of the approval levels and where each begins. The game calls 50 "High".
 - How to give gold to a character who carries none. There is no stack to change, so it means
   creating an item.
 - Whether the game checks the package's MD5 or the per-mod MD5s on load.
