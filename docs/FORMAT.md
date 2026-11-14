@@ -81,7 +81,7 @@ Everything is under `MetaData/MetaData`:
 - `ModuleSettings/Mods/ModuleShortDesc`: one per mod, with `Folder`, `Name`, `UUID`, `MD5`,
   `Version64` and `PublishHandle`. All the samples are modded. `Globals.lsf` and every level
   cache carry the same list, under a `ModuleSettings/ModuleSettings/Mods` root. The editor
-  takes a removed mod out of all of them. **Not yet tried in the game.**
+  only reads the list.
 - The mods the game has active are in the profile's `modsettings.lsx`, beside its
   `Savegames` folder: `PlayerProfiles/<profile>/modsettings.lsx`, an XML file of
   `ModuleShortDesc` nodes. The editor reads only each entry's `UUID`, or its `Folder` if it

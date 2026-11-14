@@ -118,9 +118,8 @@ fn inventory_lists_holders_and_changes_a_stack() {
 }
 
 #[test]
-fn mods_not_active_in_the_game_can_be_taken_off_the_list() {
+fn mods_are_listed_with_whether_the_game_has_them_active() {
     use nautiloid_save_editor::saves::build::mod_uuid;
-    use nautiloid_save_editor::session::Session;
     // The game's own layout: the profile's mod list beside its Savegames folder.
     let root = temp_dir("mods");
     let story = root.join("Public/Savegames/Story");
@@ -147,17 +146,11 @@ fn mods_not_active_in_the_game_can_be_taken_off_the_list() {
     assert!(ui.sees("ADDED MODS (12)"));
     assert!(ui.sees("Sample mod 1"));
     assert!(ui.find_all("ACTIVE").len() >= 2);
-    assert!(ui.sees("NOT ACTIVE"));
-    ui.click("Remove the 10 not active in your game");
-    assert_eq!(ui.app.session().unwrap().changes().len(), 10);
-    assert!(ui.sees("REMOVED"));
+    assert_eq!(ui.find_all("NOT ACTIVE").len(), 10);
+    // Nothing here changes the save.
+    assert!(!ui.sees("Remove"));
+    assert!(!ui.app.session().unwrap().is_dirty());
     ui.snapshot("14-mods");
-
-    ui.click("Export as a new save…");
-    ui.click("Export");
-    let exported =
-        Session::open(&story.join("Tav-1234__Shattered Sanctum - 8h 02m - Edited")).unwrap();
-    assert_eq!(exported.summary().mods, ["Sample mod 1", "Sample mod 2"]);
     std::fs::remove_dir_all(&root).unwrap();
 }
 

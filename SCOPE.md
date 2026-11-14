@@ -59,8 +59,9 @@ Built (see Status).
    supplies belong here: the game works the total out from the food items. Items go by the
    game's internal names, tidied; the names the game shows come with the catalog in Phase 3.
 3. **Approval.** Built. Each companion's approval of the player's character.
-4. **Mods.** Built. The save's list of required mods, compared with the mods the game has
-   active, with removal of ones that are no longer installed.
+4. **Mods.** Built, read only. The save's list of required mods, compared with the mods the
+   game has active. Removing a mod from a save was built and then dropped: the game's own
+   mod manager handles that well enough.
 
 ### Phase 3: later
 
@@ -109,8 +110,7 @@ not been tried in the game:
 - Not yet tried: a level-up or a change of gold for a companion at camp. Both are the same
   fields as a party member's.
 
-The Mods tab is built and not yet tried in the game. With it, the four Phase 2 tabs are
-done; next is the Honour Mode stretch goal or Phase 3, adding items.
+With the Mods tab the four Phase 2 tabs are done. Phase 3, adding items, is next.
 
 Phase 0 is built and passes on all eleven sample saves:
 

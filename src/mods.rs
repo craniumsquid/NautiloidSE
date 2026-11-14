@@ -1,14 +1,12 @@
-//! The mods a save lists as required, which of them the game has active, and taking one off
-//! the list.
+//! The mods a save lists as required, and which of them the game has active.
 //!
 //! A save lists its mods in `meta.lsf`, and again in `Globals.lsf` and every level cache, as
 //! `ModuleSettings/Mods/ModuleShortDesc` nodes. The game reads the list when a save is
-//! loaded and warns about any mod that is missing. Taking a mod off the list takes it out of
-//! every document; whatever the mod added to the world stays in the save.
+//! loaded and warns about any mod that is missing. The editor only reads it: the game's own
+//! mod manager is the place to change it.
 
 use crate::lsf::Lsf;
 use crate::value::Value;
-use anyhow::Result;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -55,15 +53,6 @@ impl Module {
             v & 0x7fff_ffff
         )
     }
-
-    /// What identifies the mod across documents: its identifier, or its folder when the save
-    /// gives no identifier.
-    pub fn key(&self) -> String {
-        match self.uuid.is_empty() {
-            true => self.folder.to_lowercase(),
-            false => self.uuid.clone(),
-        }
-    }
 }
 
 fn text(lsf: &Lsf, node: u32, name: &str) -> String {
@@ -92,14 +81,6 @@ fn module(lsf: &Lsf, node: u32) -> Module {
     }
 }
 
-/// Every `ModuleShortDesc` node in a document's mod lists.
-fn module_nodes(lsf: &Lsf) -> Vec<u32> {
-    (0..lsf.node_count() as u32)
-        .filter(|&node| lsf.node_name(node) == "ModuleShortDesc")
-        .filter(|&node| lsf.parent(node).is_some_and(|p| lsf.node_name(p) == "Mods"))
-        .collect()
-}
-
 /// The mods `meta.lsf` lists, in its order.
 pub fn read(meta: &Lsf) -> Vec<Module> {
     let Some(list) = meta.find(&["MetaData", "MetaData", "ModuleSettings", "Mods"]) else {
@@ -108,19 +89,6 @@ pub fn read(meta: &Lsf) -> Vec<Module> {
     meta.children_named(list, "ModuleShortDesc")
         .map(|node| module(meta, node))
         .collect()
-}
-
-/// Takes the mods whose [`Module::key`] is in `keys` off every list in the document, and
-/// returns how many entries went.
-pub fn remove(lsf: &mut Lsf, keys: &HashSet<String>) -> Result<usize> {
-    let doomed: Vec<u32> = module_nodes(lsf)
-        .into_iter()
-        .filter(|&node| keys.contains(&module(lsf, node).key()))
-        .collect();
-    if !doomed.is_empty() {
-        lsf.remove_nodes(&doomed)?;
-    }
-    Ok(doomed.len())
 }
 
 /// The mods the game has active, from the profile's `modsettings.lsx`.
@@ -236,24 +204,13 @@ mod tests {
     }
 
     #[test]
-    fn reads_and_removes_mods() {
-        let mut meta = meta();
-        let mods = read(&meta);
+    fn reads_the_mod_list() {
+        let mods = read(&meta());
         let folders: Vec<&str> = mods.iter().map(|m| m.folder.as_str()).collect();
         assert_eq!(folders, ["GustavX", "FaerunColors", "ImpUI"]);
         assert!(mods[0].base && !mods[1].base);
         assert_eq!(mods[1].version_text(), "1.0.0.0");
-        assert_eq!(mods[1].key(), Uuid([2; 16]).to_string());
-
-        let keys = HashSet::from([mods[1].key()]);
-        assert_eq!(remove(&mut meta, &keys).unwrap(), 1);
-        let meta = Lsf::parse(&meta.write().unwrap()).unwrap();
-        let left: Vec<String> = read(&meta).into_iter().map(|m| m.folder).collect();
-        assert_eq!(left, ["GustavX", "ImpUI"]);
-        // A node of the same name outside a mod list is not touched.
-        assert!(meta
-            .find(&["MetaData", "MetaData", "Other", "ModuleShortDesc"])
-            .is_some());
+        assert_eq!(mods[1].uuid, Uuid([2; 16]).to_string());
     }
 
     #[test]

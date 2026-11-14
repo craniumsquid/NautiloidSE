@@ -378,11 +378,6 @@ fn a_session_exports_a_real_save_that_reopens_with_its_changes() {
         if let Some(points) = session.value(Field::Allocated(0, 3)) {
             session.set(Field::Allocated(0, 3), points + 2, 20.0);
         }
-        // And the last mod that isn't part of the game is taken off the list.
-        let dropped = session.mods().iter().rposition(|m| !m.base);
-        if let Some(m) = dropped {
-            session.set(Field::Mod(m), 0, 30.0);
-        }
         let expected = session.party().clone();
 
         let name = session.suggested_name(&out);
@@ -400,24 +395,6 @@ fn a_session_exports_a_real_save_that_reopens_with_its_changes() {
         assert_eq!(reopened.value(Field::Experience(0)), Some(experience + 500));
         assert_eq!(reopened.value(Field::LevelUps(0)), Some(1));
         assert_eq!(reopened.party().characters.len(), expected.characters.len());
-        if let Some(m) = dropped {
-            let gone = &session.mods()[m];
-            assert_eq!(reopened.mods().len(), session.mods().len() - 1);
-            assert!(!reopened.mods().contains(gone));
-            // No document in the save lists it any more.
-            let written = Save::open(&exported).unwrap();
-            for document in written.lsf_names() {
-                let mut lsf = written.lsf(document).unwrap();
-                let keys = std::collections::HashSet::from([gone.key()]);
-                assert_eq!(
-                    nautiloid_save_editor::mods::remove(&mut lsf, &keys).unwrap(),
-                    0,
-                    "{}: {document} still lists {}",
-                    path.display(),
-                    gone.name
-                );
-            }
-        }
         // The browser lists it under its new name, in the same campaign.
         let summary = saves::summarize(&exported).unwrap();
         assert_eq!(summary.name, name);

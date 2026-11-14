@@ -78,7 +78,6 @@ impl Tab {
         match field {
             Field::Approval(..) => Tab::Approval,
             Field::Amount(..) => Tab::Inventory,
-            Field::Mod(_) => Tab::Mods,
             _ => Tab::Party,
         }
     }
@@ -491,7 +490,7 @@ impl EditorApp {
                                         Tab::Party => party::show(ui, session, actions),
                                         Tab::Inventory => inventory::show(ui, session, actions),
                                         Tab::Approval => approval::show(ui, session, actions),
-                                        Tab::Mods => mods::show(ui, session, actions),
+                                        Tab::Mods => mods::show(ui, session),
                                         Tab::Info => info::show(ui, session, now),
                                     });
                             });

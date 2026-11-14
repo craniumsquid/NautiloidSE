@@ -13,7 +13,6 @@ use crate::party::{self, Character, Party};
 use crate::save::{self, PartyMember, Save};
 use crate::saves::{self, SaveSummary};
 use anyhow::{anyhow, bail, ensure, Context, Result};
-use std::collections::HashSet;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
@@ -47,9 +46,6 @@ pub enum Field {
     Approval(usize, usize),
     /// How many a stack of items holds: the inventory, then the item in it.
     Amount(usize, usize),
-    /// Whether one of the save's mods stays on its list: 1 if it does, 0 if it is to be
-    /// taken off.
-    Mod(usize),
 }
 
 /// One difference between the save as opened and as it now stands.
@@ -90,8 +86,6 @@ pub struct Session {
     order: Vec<usize>,
     /// The mods the save lists, as `meta.lsf` has them.
     mods: Vec<Module>,
-    /// For each mod, whether it stays on the list.
-    kept: Vec<bool>,
     /// The mods the game has active, when the save is in the game's own folders.
     active: Option<mods::Active>,
 }
@@ -160,8 +154,6 @@ fn field_of(party: &Party, field: Field) -> Option<i32> {
             .get(item)
             .filter(|item| item.stacked)
             .map(|item| signed(item.amount)),
-        // Kept by the session, not the party.
-        Field::Mod(_) => None,
     }
 }
 
@@ -192,7 +184,6 @@ fn set_field(party: &mut Party, field: Field, value: i32) {
         }
         Field::Approval(..) => {}
         Field::Amount(inventory, item) => party.inventories[inventory].items[item].amount = value,
-        Field::Mod(_) => {}
     }
 }
 
@@ -237,7 +228,6 @@ impl Session {
             last_edit: None,
             entries,
             order,
-            kept: vec![true; mods.len()],
             mods,
             active,
         })
@@ -273,7 +263,7 @@ impl Session {
         &self.original
     }
 
-    /// The mods the save lists, in its order. Whether each stays is [`Field::Mod`].
+    /// The mods the save lists, in its order.
     pub fn mods(&self) -> &[Module] {
         &self.mods
     }
@@ -287,26 +277,12 @@ impl Session {
     /// The field's value now, or `None` if this save has no such field (a character with no
     /// character creation record has no allocations; a new game has no Inspiration).
     pub fn value(&self, field: Field) -> Option<i32> {
-        match field {
-            Field::Mod(m) => self.kept.get(m).map(|&kept| kept as i32),
-            _ => field_of(&self.current, field),
-        }
+        field_of(&self.current, field)
     }
 
     /// The field's value in the save as opened.
     pub fn original_value(&self, field: Field) -> Option<i32> {
-        match field {
-            Field::Mod(m) => (m < self.mods.len()).then_some(1),
-            _ => field_of(&self.original, field),
-        }
-    }
-
-    /// Changes a field without recording a step.
-    fn apply(&mut self, field: Field, value: i32) {
-        match field {
-            Field::Mod(m) => self.kept[m] = value != 0,
-            _ => set_field(&mut self.current, field, value),
-        }
+        field_of(&self.original, field)
     }
 
     pub fn is_changed(&self, field: Field) -> bool {
@@ -331,11 +307,6 @@ impl Session {
             }
             // A stack the save already has above the editor's limit keeps its room.
             Field::Amount(..) => 1..=MAX_AMOUNT.max(self.original_value(field).unwrap_or(1)),
-            // The game's own modules stay.
-            Field::Mod(m) => match self.mods.get(m).is_some_and(|m| m.base) {
-                true => 1..=1,
-                false => 0..=1,
-            },
         }
     }
 
@@ -350,7 +321,7 @@ impl Session {
         if value == before {
             return;
         }
-        self.apply(field, value);
+        set_field(&mut self.current, field, value);
         self.redo.clear();
         let merges = self
             .last_edit
@@ -401,7 +372,7 @@ impl Session {
     /// Undoes the last step and returns the field it was to.
     pub fn undo(&mut self) -> Option<Field> {
         let step = self.undo.pop()?;
-        self.apply(step.field, step.before);
+        set_field(&mut self.current, step.field, step.before);
         self.redo.push(step);
         self.last_edit = None;
         Some(step.field)
@@ -410,7 +381,7 @@ impl Session {
     /// Redoes the last step undone and returns the field it was to.
     pub fn redo(&mut self) -> Option<Field> {
         let step = self.redo.pop()?;
-        self.apply(step.field, step.after);
+        set_field(&mut self.current, step.field, step.after);
         self.undo.push(step);
         self.last_edit = None;
         Some(step.field)
@@ -439,8 +410,6 @@ impl Session {
                 .filter(|(_, item)| item.stacked);
             fields.extend(stacked.map(|(item, _)| Field::Amount(i, item)));
         }
-        let removable = self.mods.iter().enumerate().filter(|(_, m)| !m.base);
-        fields.extend(removable.map(|(m, _)| Field::Mod(m)));
         fields
     }
 
@@ -497,21 +466,6 @@ impl Session {
                     .map_or_else(String::new, |item| tidy(&item.stats));
                 (who, what)
             }
-            Field::Mod(m) => (
-                "Mods".to_owned(),
-                self.mods
-                    .get(m)
-                    .map_or_else(String::new, |m| m.name.clone()),
-            ),
-        }
-    }
-
-    /// A value as the Changes panel shows it.
-    fn shown(field: Field, value: i32) -> String {
-        match field {
-            Field::Mod(_) if value == 0 => "Removed".to_owned(),
-            Field::Mod(_) => "Required".to_owned(),
-            _ => value.to_string(),
         }
     }
 
@@ -548,25 +502,15 @@ impl Session {
                     field,
                     who,
                     what,
-                    before: Self::shown(field, self.original_value(field)?),
-                    after: Self::shown(field, self.value(field)?),
+                    before: self.original_value(field)?.to_string(),
+                    after: self.value(field)?.to_string(),
                 })
             })
             .collect()
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.current != self.original || self.kept.iter().any(|&kept| !kept)
-    }
-
-    /// The mods to take off the list, by [`Module::key`].
-    fn removed_mods(&self) -> HashSet<String> {
-        self.mods
-            .iter()
-            .zip(&self.kept)
-            .filter(|(_, &kept)| !kept)
-            .map(|(m, _)| m.key())
-            .collect()
+        self.current != self.original
     }
 
     /// The folder exports go to unless told otherwise: the one the opened save is in.
@@ -633,8 +577,6 @@ impl Session {
                     character(c).approval[which].of,
                     value,
                 )?,
-                // Not in the entity data; see `export`.
-                Field::Mod(_) => {}
             }
         }
         Ok(entities)
@@ -648,23 +590,6 @@ impl Session {
         let mut globals = self.globals.clone();
         entities.store(&mut globals)?;
         let mut package = self.save.package.clone();
-        let mut replaced = HashSet::from([save::GLOBALS.to_owned()]);
-
-        // A mod taken off the list goes from every document that lists it.
-        let removed = self.removed_mods();
-        if !removed.is_empty() {
-            mods::remove(&mut globals, &removed)?;
-            for document in self.save.lsf_names() {
-                if document == save::GLOBALS {
-                    continue;
-                }
-                let mut lsf = self.save.lsf(document)?;
-                if mods::remove(&mut lsf, &removed)? > 0 {
-                    package.replace(document, &lsf.write()?)?;
-                    replaced.insert(document.to_owned());
-                }
-            }
-        }
         package.replace(save::GLOBALS, &globals.write()?)?;
         let folder = save::export_copy(&self.save, &package, parent, name)?;
 
@@ -676,26 +601,8 @@ impl Session {
                 same_party(&party, &self.current),
                 "the exported save does not hold the changes"
             );
-            let expected: Vec<Module> = self
-                .mods
-                .iter()
-                .zip(&self.kept)
-                .filter(|(_, &kept)| kept)
-                .map(|(m, _)| m.clone())
-                .collect();
-            ensure!(
-                mods::read(&written.lsf(save::META)?) == expected,
-                "the exported save does not list the mods it should"
-            );
-            for document in &replaced {
-                let lsf = written.lsf(document)?;
-                ensure!(
-                    mods::remove(&mut lsf.clone(), &removed)? == 0,
-                    "{document} still lists a mod that was taken off"
-                );
-            }
             for entry in self.save.package.entries() {
-                if !replaced.contains(entry.name()) {
+                if entry.name() != save::GLOBALS {
                     ensure!(
                         self.save.package.unpack(entry)?
                             == written.package.read_file(entry.name())?,
@@ -1061,38 +968,13 @@ mod tests {
     }
 
     #[test]
-    fn a_mod_can_be_taken_off_the_list() {
+    fn lists_the_saves_mods() {
         let dir = temp_dir("mods");
-        let mut session = open(&dir);
+        let session = open(&dir);
         let names: Vec<&str> = session.mods().iter().map(|m| m.name.as_str()).collect();
         assert_eq!(names, ["GustavX", "Faerun Colors", "Better UI"]);
+        assert!(session.mods()[0].base && !session.mods()[1].base);
         assert!(session.active_mods().is_none(), "not in the game's folders");
-        // The game's own module stays.
-        assert_eq!(session.range(Field::Mod(0)), 1..=1);
-        session.set(Field::Mod(0), 0, 0.0);
-        assert!(!session.is_dirty());
-
-        session.set(Field::Mod(1), 0, 10.0);
-        assert!(session.is_dirty());
-        let change = session.changes().pop().unwrap();
-        assert_eq!(
-            (change.who.as_str(), change.what.as_str()),
-            ("Mods", "Faerun Colors")
-        );
-        assert_eq!(
-            (change.before.as_str(), change.after.as_str()),
-            ("Required", "Removed")
-        );
-        session.undo();
-        assert!(!session.is_dirty());
-        session.redo();
-
-        let exported = session.export(&dir, "Fewer mods").unwrap();
-        let reopened = Session::open(&exported).unwrap();
-        let names: Vec<&str> = reopened.mods().iter().map(|m| m.name.as_str()).collect();
-        assert_eq!(names, ["GustavX", "Better UI"]);
-        assert_eq!(reopened.summary().mods, ["Better UI"]);
-        assert_eq!(reopened.party(), session.party(), "the party is as it was");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
