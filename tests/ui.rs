@@ -37,6 +37,12 @@ fn opens_a_save_and_shows_the_party() {
     assert!(ui.sees("Karlach"));
     assert!(ui.sees("Carries none."));
     ui.snapshot("02b-party-scrolled");
+    // Below the party, the companions waiting at camp.
+    ui.scroll(egui::pos2(600.0, 500.0), -900.0);
+    assert!(ui.sees("At camp"));
+    assert!(ui.sees("Gale"));
+    assert!(ui.sees("Level 4 · At camp"));
+    ui.snapshot("02c-party-at-camp");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

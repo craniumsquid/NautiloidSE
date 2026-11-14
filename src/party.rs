@@ -95,7 +95,7 @@ pub struct GoldStack {
     pub in_container: bool,
 }
 
-/// A party member.
+/// A character the player controls: a party member, or a companion waiting at camp.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Character {
     /// The entity's identifier in the save.
@@ -108,8 +108,9 @@ pub struct Character {
     pub level: u32,
     /// The level the character is entitled to. Above `level`, the game offers a level-up.
     pub entitled_level: u32,
-    /// Total experience. The game shows experience into the current level.
-    pub experience: u32,
+    /// Total experience, for a character in the party. The game shows experience into the
+    /// current level. It keeps none for a companion at camp, who has `None`.
+    pub experience: Option<u32>,
     /// Ability score totals, Strength to Charisma, with every bonus applied. Read only: the
     /// game recalculates them on load.
     pub abilities: [u32; 6],
@@ -122,6 +123,11 @@ pub struct Character {
 impl Character {
     pub fn gold_total(&self) -> u64 {
         self.gold.iter().map(|g| g.amount as u64).sum()
+    }
+
+    /// Whether the character is in the party, not waiting at camp.
+    pub fn in_party(&self) -> bool {
+        self.experience.is_some()
     }
 
     /// A name to show: the stored one, or the companion's for a character played as an
@@ -161,10 +167,10 @@ pub struct Inspiration {
     pub max: u32,
 }
 
-/// The party and what it shares.
+/// The party, the companions at camp, and what the party shares.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Party {
-    /// In the order the save lists them.
+    /// The party in the order the save lists it, then the companions at camp.
     pub characters: Vec<Character>,
     pub inspiration: Option<Inspiration>,
     /// Read only: the game recalculates it from the food items on load.
@@ -172,8 +178,14 @@ pub struct Party {
 }
 
 impl Party {
+    /// The gold the party carries, which is the number the game shows. What companions at
+    /// camp carry is not part of it.
     pub fn gold_total(&self) -> u64 {
-        self.characters.iter().map(Character::gold_total).sum()
+        self.characters
+            .iter()
+            .filter(|c| c.in_party())
+            .map(Character::gold_total)
+            .sum()
     }
 }
 
@@ -379,14 +391,33 @@ fn whole(bytes: &[u8]) -> Result<u32> {
 pub fn read(globals: &Lsf, entities: &NewAge) -> Result<Party> {
     let templates = templates(globals);
     let experience = required(entities, tables::EXPERIENCE)?;
-    let members: Vec<u32> = entities
+    // The party is whoever has experience.
+    let mut members: Vec<u32> = entities
         .owned_rows(experience)
         .map(|(_, owner)| owner)
         .collect();
+    let party_size = members.len();
     let creation = entities.table(tables::CREATION);
+    // Everyone else with a character creation record is a companion waiting at camp. They
+    // keep their level, their ability points and what they carry, but no experience.
+    if let Some(creation) = creation {
+        let has = |name: &str, entity: u32| {
+            entities
+                .table(name)
+                .is_some_and(|table| entities.row_of(table, entity).is_some())
+        };
+        for (_, owner) in entities.owned_rows(creation) {
+            let complete = [tables::LEVEL, tables::ENTITLED_LEVEL, tables::STATS]
+                .iter()
+                .all(|name| has(name, owner));
+            if complete && !members.contains(&owner) {
+                members.push(owner);
+            }
+        }
+    }
 
     let mut characters = Vec::with_capacity(members.len());
-    for &index in &members {
+    for (position, &index) in members.iter().enumerate() {
         let entity = entities.entity_id(index);
         let mut abilities = [0u32; 6];
         for (i, ability) in abilities.iter_mut().enumerate() {
@@ -419,14 +450,21 @@ pub fn read(globals: &Lsf, entities: &NewAge) -> Result<Party> {
             name,
             level: entities.get_u32(tables::LEVEL, index, 0)?,
             entitled_level: entities.get_u32(tables::ENTITLED_LEVEL, index, 0)?,
-            experience: entities.get_u32(tables::EXPERIENCE, index, tables::EXPERIENCE_TOTAL[0])?,
+            experience: match position < party_size {
+                true => Some(entities.get_u32(
+                    tables::EXPERIENCE,
+                    index,
+                    tables::EXPERIENCE_TOTAL[0],
+                )?),
+                false => None,
+            },
             abilities,
             allocated,
             gold: Vec::new(),
         });
     }
 
-    // Gold: every stacked item made from the gold template that a party member holds.
+    // Gold: every stacked item made from the gold template that one of them holds.
     let inventories = Inventories::read(entities)?;
     for (&item, stacked) in &inventories.stacked {
         let id = entities.entity_id(item);
@@ -478,14 +516,20 @@ pub fn read(globals: &Lsf, entities: &NewAge) -> Result<Party> {
     })
 }
 
-fn member(entities: &NewAge, character: Uuid) -> Result<u32> {
-    let index = entities
+/// The entity of a character, in the party or at camp.
+fn character_index(entities: &NewAge, character: Uuid) -> Result<u32> {
+    entities
         .entity_index(character)
-        .ok_or_else(|| anyhow!("no entity {character} in the save"))?;
+        .ok_or_else(|| anyhow!("no entity {character} in the save"))
+}
+
+/// The entity of a party member.
+fn member(entities: &NewAge, character: Uuid) -> Result<u32> {
+    let index = character_index(entities, character)?;
     let experience = required(entities, tables::EXPERIENCE)?;
     ensure!(
         entities.row_of(experience, index).is_some(),
-        "{character} is not a party member"
+        "{character} is not in the party, and the game keeps experience only for the party"
     );
     Ok(index)
 }
@@ -505,10 +549,10 @@ pub fn set_experience(entities: &mut NewAge, character: Uuid, total: u32) -> Res
     Ok(())
 }
 
-/// Sets the level a party member is entitled to. Above their level, the game offers a
-/// level-up and takes the player through the choices itself.
+/// Sets the level a character is entitled to. Above their level, the game offers a level-up
+/// and takes the player through the choices itself.
 pub fn set_entitled_level(entities: &mut NewAge, character: Uuid, level: u32) -> Result<()> {
-    let index = member(entities, character)?;
+    let index = character_index(entities, character)?;
     let current = entities.get_u32(tables::LEVEL, index, 0)?;
     ensure!(
         (current..=MAX_LEVEL).contains(&level),
@@ -531,7 +575,7 @@ pub fn set_allocated(
         points <= MAX_ALLOCATED,
         "at most {MAX_ALLOCATED} points can go into an ability"
     );
-    let index = member(entities, character)?;
+    let index = character_index(entities, character)?;
     let current = entities.get_array_u32(tables::CREATION, index, tables::CREATION_ABILITIES)?;
     ensure!(
         current.len() == 7,
@@ -606,7 +650,10 @@ pub mod build {
     pub const TRADER_PACK: u32 = 9;
     pub const TRADER_GOLD: u32 = 10;
     pub const ROPE: u32 = 11;
-    pub const ENTITY_COUNT: u32 = 12;
+    pub const CAMPER: u32 = 12;
+    pub const CAMPER_GOLD: u32 = 13;
+    pub const CAMPER_PACK: u32 = 14;
+    pub const ENTITY_COUNT: u32 = 15;
 
     pub fn id(entity: u32) -> [u8; 16] {
         let mut id = [0u8; 16];
@@ -646,11 +693,13 @@ pub mod build {
         let characters = Node::new("Creators")
             .child(creator(HERO, "e285d7b5-6b09-4857-89aa-a91e9e6898e5"))
             .child(creator(COMPANION, "2c76687d-93a2-477b-8b18-8a14b549304c"))
-            .child(creator(TRADER, "00000000-0000-0000-0000-00000000aaaa"));
+            .child(creator(TRADER, "00000000-0000-0000-0000-00000000aaaa"))
+            .child(creator(CAMPER, "ad9af97d-75da-406a-ae13-7071c563f604"));
         let items = Node::new("Creators")
             .child(creator(HERO_GOLD, GOLD_TEMPLATE))
             .child(creator(BAGGED_GOLD, GOLD_TEMPLATE))
             .child(creator(TRADER_GOLD, GOLD_TEMPLATE))
+            .child(creator(CAMPER_GOLD, GOLD_TEMPLATE))
             .child(creator(BAG, "00000000-0000-0000-0000-00000000bbbb"))
             .child(creator(ROPE, "00000000-0000-0000-0000-00000000cccc"));
         let entities = Node::new(crate::newage::NODE).attr(
@@ -672,7 +721,7 @@ pub mod build {
     }
 
     /// Entity data for a hero with 3385 gold loose and 371 in a bag, a companion with none,
-    /// a trader with 500, and a party with 3 of 4 Inspiration.
+    /// a companion at camp with 120, a trader with 500, and a party with 3 of 4 Inspiration.
     pub fn sample_entities() -> NewAge {
         let entities: Vec<[u8; 16]> = (0..ENTITY_COUNT).map(id).collect();
         let stats = |abilities: [u32; 6]| {
@@ -691,14 +740,14 @@ pub mod build {
             TableSpec {
                 name: tables::LEVEL,
                 row_len: 4,
-                rows: vec![words(&[5]), words(&[5]), words(&[3])],
-                owners: Some(vec![HERO, COMPANION, TRADER]),
+                rows: vec![words(&[5]), words(&[5]), words(&[3]), words(&[4])],
+                owners: Some(vec![HERO, COMPANION, TRADER, CAMPER]),
             },
             TableSpec {
                 name: tables::ENTITLED_LEVEL,
                 row_len: 4,
-                rows: vec![words(&[5]), words(&[5]), words(&[3])],
-                owners: Some(vec![HERO, COMPANION, TRADER]),
+                rows: vec![words(&[5]), words(&[5]), words(&[3]), words(&[4])],
+                owners: Some(vec![HERO, COMPANION, TRADER, CAMPER]),
             },
             TableSpec {
                 name: tables::STATS,
@@ -707,26 +756,31 @@ pub mod build {
                     stats([8, 14, 16, 17, 10, 20]),
                     stats([18, 13, 15, 8, 12, 10]),
                     stats([10, 10, 10, 10, 10, 10]),
+                    stats([8, 13, 15, 17, 10, 12]),
                 ],
-                owners: Some(vec![HERO, COMPANION, TRADER]),
+                owners: Some(vec![HERO, COMPANION, TRADER, CAMPER]),
             },
-            // The hero has a character creation record; the companion does not.
+            // The hero and the companion at camp have a character creation record; the
+            // companion in the party does not.
             TableSpec {
                 name: tables::CREATION,
                 row_len: 88,
-                rows: vec![vec![0; 88]],
-                owners: Some(vec![HERO]),
+                rows: vec![vec![0; 88]; 2],
+                owners: Some(vec![HERO, CAMPER]),
             },
             TableSpec {
                 name: "test.v0.NameBytes",
-                row_len: 3,
-                rows: vec![b"Tav".to_vec()],
+                row_len: 4,
+                rows: vec![b"Tav\0".to_vec(), b"Gale".to_vec()],
                 owners: None,
             },
             TableSpec {
                 name: "test.v0.Allocations",
                 row_len: 4,
-                rows: [0, 0, 6, 7, 0, 2, 7].iter().map(|&p| words(&[p])).collect(),
+                rows: [0, 0, 6, 7, 0, 2, 7, 0, 0, 5, 6, 7, 2, 4]
+                    .iter()
+                    .map(|&p| words(&[p]))
+                    .collect(),
                 owners: None,
             },
             TableSpec {
@@ -757,17 +811,18 @@ pub mod build {
                 ],
                 owners: None,
             },
-            // Three stacks: the hero's loose gold, the gold in the hero's bag, the trader's.
+            // Four stacks: the hero's loose gold, the gold in the hero's bag, the trader's
+            // and the camp companion's.
             TableSpec {
                 name: tables::STACK_OF,
                 row_len: 8,
-                rows: vec![vec![0; 8]; 3],
-                owners: Some(vec![HERO_GOLD, BAGGED_GOLD, TRADER_GOLD]),
+                rows: vec![vec![0; 8]; 4],
+                owners: Some(vec![HERO_GOLD, BAGGED_GOLD, TRADER_GOLD, CAMPER_GOLD]),
             },
             TableSpec {
                 name: tables::STACK,
                 row_len: 32,
-                rows: vec![vec![0; 32]; 3],
+                rows: vec![vec![0; 32]; 4],
                 owners: None,
             },
             TableSpec {
@@ -778,32 +833,40 @@ pub mod build {
                     words(&[0x4d72_0000, 3385]),
                     words(&[0x4d72_0000, 371]),
                     words(&[0x4d72_0000, 500]),
+                    words(&[0x4d72_0000, 120]),
                 ],
                 owners: None,
             },
             TableSpec {
                 name: "test.v0.StackItems",
                 row_len: 8,
-                rows: vec![vec![0; 8]; 3],
+                rows: vec![vec![0; 8]; 4],
                 owners: None,
             },
             TableSpec {
                 name: tables::MEMBER,
                 row_len: 8,
-                rows: vec![vec![0; 8]; 5],
-                owners: Some(vec![HERO_GOLD, BAG, BAGGED_GOLD, TRADER_GOLD, ROPE]),
+                rows: vec![vec![0; 8]; 6],
+                owners: Some(vec![
+                    HERO_GOLD,
+                    BAG,
+                    BAGGED_GOLD,
+                    TRADER_GOLD,
+                    ROPE,
+                    CAMPER_GOLD,
+                ]),
             },
             TableSpec {
                 name: tables::MEMBER_DATA,
                 row_len: 16,
-                rows: vec![vec![0; 16]; 5],
+                rows: vec![vec![0; 16]; 6],
                 owners: None,
             },
             TableSpec {
                 name: tables::INVENTORY_OWNER,
                 row_len: 8,
-                rows: vec![vec![0; 8]; 3],
-                owners: Some(vec![HERO_PACK, BAG_INSIDE, TRADER_PACK]),
+                rows: vec![vec![0; 8]; 4],
+                owners: Some(vec![HERO_PACK, BAG_INSIDE, TRADER_PACK, CAMPER_PACK]),
             },
         ];
         let mut data = NewAge::parse(blob(&entities, &specs)).unwrap();
@@ -818,27 +881,26 @@ pub mod build {
         };
         let fixed = NewAge::parse(blob(&entities, &specs)).unwrap();
 
-        point(tables::CREATION, 0, 56, at(&fixed, "test.v0.NameBytes", 0));
-        point(tables::CREATION, 0, 64, 3);
-        point(
-            tables::CREATION,
-            0,
-            72,
-            at(&fixed, "test.v0.Allocations", 0),
-        );
-        point(
-            tables::CREATION,
-            0,
-            80,
-            at(&fixed, "test.v0.Allocations", 0) + 28,
-        );
+        // The hero is "Tav", the companion at camp "Gale"; each has seven allocations.
+        for (row, name_len) in [(0, 3), (1, 4)] {
+            point(
+                tables::CREATION,
+                row,
+                56,
+                at(&fixed, "test.v0.NameBytes", row),
+            );
+            point(tables::CREATION, row, 64, name_len);
+            let allocations = at(&fixed, "test.v0.Allocations", row * 7);
+            point(tables::CREATION, row, 72, allocations);
+            point(tables::CREATION, row, 80, allocations + 28);
+        }
         // The party's resources are the first two entries, the hero's the third.
         let entries = at(&fixed, "test.v0.ResourceEntries", 0);
         point(tables::RESOURCES, 0, 0, entries);
         point(tables::RESOURCES, 0, 8, entries + 128);
         point(tables::RESOURCES, 1, 0, entries + 128);
         point(tables::RESOURCES, 1, 8, entries + 192);
-        for (stack, item) in [HERO_GOLD, BAGGED_GOLD, TRADER_GOLD]
+        for (stack, item) in [HERO_GOLD, BAGGED_GOLD, TRADER_GOLD, CAMPER_GOLD]
             .into_iter()
             .enumerate()
         {
@@ -851,12 +913,19 @@ pub mod build {
             point(tables::STACK, stack, 16, entry);
             point(tables::STACK, stack, 24, entry + 8);
         }
-        let packs = [HERO_PACK, HERO_PACK, BAG_INSIDE, TRADER_PACK, HERO_PACK];
+        let packs = [
+            HERO_PACK,
+            HERO_PACK,
+            BAG_INSIDE,
+            TRADER_PACK,
+            HERO_PACK,
+            CAMPER_PACK,
+        ];
         for (row, pack) in packs.into_iter().enumerate() {
             point(tables::MEMBER, row, 0, at(&fixed, tables::MEMBER_DATA, row));
             point(tables::MEMBER_DATA, row, 0, entity(&fixed, pack));
         }
-        for (row, owner) in [HERO, BAG, TRADER].into_iter().enumerate() {
+        for (row, owner) in [HERO, BAG, TRADER, CAMPER].into_iter().enumerate() {
             point(tables::INVENTORY_OWNER, row, 0, entity(&fixed, owner));
         }
         NewAge::parse(data.to_bytes()).unwrap()
@@ -871,7 +940,7 @@ mod tests {
     #[test]
     fn reads_the_party() {
         let party = read(&sample_globals(), &sample_entities()).unwrap();
-        assert_eq!(party.characters.len(), 2);
+        assert_eq!(party.characters.len(), 3);
         assert_eq!(party.inspiration, Some(Inspiration { amount: 3, max: 4 }));
         assert_eq!(party.camp_supplies, Some(660));
         assert_eq!(party.gold_total(), 3756);
@@ -882,7 +951,7 @@ mod tests {
         assert_eq!(hero.name.as_deref(), Some("Tav"));
         assert_eq!(
             (hero.level, hero.entitled_level, hero.experience),
-            (5, 5, 5595)
+            (5, 5, Some(5595))
         );
         assert_eq!(hero.abilities, [8, 14, 16, 17, 10, 20]);
         assert_eq!(hero.allocated, Some([0, 6, 7, 0, 2, 7]));
@@ -914,6 +983,40 @@ mod tests {
         assert_eq!(companion.allocated, None);
         assert_eq!(companion.abilities, [18, 13, 15, 8, 12, 10]);
         assert!(companion.gold.is_empty());
+        assert!(hero.in_party() && companion.in_party());
+
+        // A companion at camp comes after the party. The game keeps no experience for
+        // them, and what they carry is not the party's gold.
+        let camper = &party.characters[2];
+        assert_eq!(camper.entity, uuid(CAMPER));
+        assert_eq!(camper.name.as_deref(), Some("Gale"));
+        assert!(!camper.in_party());
+        assert_eq!(
+            (camper.level, camper.entitled_level, camper.experience),
+            (4, 4, None)
+        );
+        assert_eq!(camper.allocated, Some([0, 5, 6, 7, 2, 4]));
+        assert_eq!(camper.gold_total(), 120);
+    }
+
+    #[test]
+    fn a_companion_at_camp_can_be_edited_except_for_experience() {
+        let globals = sample_globals();
+        let mut entities = sample_entities();
+        set_entitled_level(&mut entities, uuid(CAMPER), 5).unwrap();
+        set_allocated(&mut entities, uuid(CAMPER), 3, 9).unwrap();
+        set_gold(&mut entities, uuid(CAMPER_GOLD), 900).unwrap();
+        let error = set_experience(&mut entities, uuid(CAMPER), 5000).unwrap_err();
+        assert!(error.to_string().contains("not in the party"), "{error}");
+
+        let after = read(&globals, &NewAge::parse(entities.to_bytes()).unwrap()).unwrap();
+        let camper = &after.characters[2];
+        assert_eq!((camper.level, camper.entitled_level), (4, 5));
+        assert_eq!(camper.allocated, Some([0, 5, 6, 9, 2, 4]));
+        assert_eq!(camper.gold_total(), 900);
+        // The hero's record is beside it and is untouched.
+        assert_eq!(after.characters[0].allocated, Some([0, 6, 7, 0, 2, 7]));
+        assert_eq!(after.gold_total(), 3756);
     }
 
     #[test]
@@ -934,7 +1037,7 @@ mod tests {
         let hero = &after.characters[0];
         assert_eq!(
             (hero.experience, hero.entitled_level, hero.level),
-            (7100, 6, 5)
+            (Some(7100), 6, 5)
         );
         assert_eq!(hero.allocated, Some([7, 6, 7, 0, 2, 7]));
         assert_eq!(

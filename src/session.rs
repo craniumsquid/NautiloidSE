@@ -83,7 +83,8 @@ pub struct Session {
 /// classes are written out and which lists the party in the game's order.
 ///
 /// A companion is listed under their own name. Anyone else, a custom character above all, is
-/// told apart by level and experience, which the summary and the entity data agree on.
+/// told apart by level and experience, which the summary and the entity data agree on. The
+/// summary lists only the party, so a companion at camp has no entry.
 fn summary_entries(members: &[PartyMember], characters: &[Character]) -> Vec<Option<usize>> {
     // The summary writes Lae'zel as "Laezel".
     let key = |name: &str| -> String {
@@ -102,15 +103,17 @@ fn summary_entries(members: &[PartyMember], characters: &[Character]) -> Vec<Opt
             entries[character] = Some(member);
         }
     };
-    for (index, character) in characters.iter().enumerate() {
+    let party = || characters.iter().enumerate().filter(|(_, c)| c.in_party());
+    for (index, character) in party() {
         if let Some(name) = character.companion() {
             claim(&mut entries, index, &|m| key(&m.origin) == key(name));
         }
     }
-    for (index, character) in characters.iter().enumerate() {
+    for (index, character) in party() {
         if entries[index].is_none() {
+            let experience = character.experience.map(u64::from);
             claim(&mut entries, index, &|m| {
-                (m.level, m.experience_total) == (character.level, character.experience as u64)
+                (m.level, Some(m.experience_total)) == (character.level, experience)
             });
         }
     }
@@ -120,7 +123,7 @@ fn summary_entries(members: &[PartyMember], characters: &[Character]) -> Vec<Opt
 fn field_of(party: &Party, field: Field) -> Option<u32> {
     let character = |i: usize| party.characters.get(i);
     match field {
-        Field::Experience(c) => character(c).map(|c| c.experience),
+        Field::Experience(c) => character(c)?.experience,
         Field::LevelUps(c) => character(c).map(|c| c.entitled_level.saturating_sub(c.level)),
         Field::Allocated(c, ability) => character(c)?.allocated?.get(ability).copied(),
         Field::Gold(c, stack) => character(c)?.gold.get(stack).map(|g| g.amount),
@@ -130,7 +133,7 @@ fn field_of(party: &Party, field: Field) -> Option<u32> {
 
 fn set_field(party: &mut Party, field: Field, value: u32) {
     match field {
-        Field::Experience(c) => party.characters[c].experience = value,
+        Field::Experience(c) => party.characters[c].experience = Some(value),
         Field::LevelUps(c) => {
             let character = &mut party.characters[c];
             character.entitled_level = character.level + value;
@@ -165,10 +168,17 @@ impl Session {
             "the save has no party to edit"
         );
         let entries = summary_entries(&summary.party, &original.characters);
-        // The summary's order is the game's: the main character first. Anyone it doesn't
-        // list comes after.
+        // The party first, in the summary's order, which is the game's: the main character
+        // first. Then the companions at camp, by name.
         let mut order: Vec<usize> = (0..original.characters.len()).collect();
-        order.sort_by_key(|&c| entries[c].unwrap_or(usize::MAX));
+        order.sort_by_key(|&c| {
+            let character = &original.characters[c];
+            (
+                !character.in_party(),
+                entries[c].unwrap_or(usize::MAX),
+                character.display_name(),
+            )
+        });
         Ok(Session {
             summary,
             save,
@@ -546,7 +556,7 @@ mod tests {
             name: name.map(str::to_owned),
             level,
             entitled_level: level,
-            experience,
+            experience: Some(experience),
             abilities: [10; 6],
             allocated: None,
             gold: Vec::new(),
@@ -623,7 +633,7 @@ mod tests {
         let dir = temp_dir("open");
         let session = open(&dir);
         assert_eq!(session.summary().name, "QuickSave_3");
-        assert_eq!(session.party().characters.len(), 2);
+        assert_eq!(session.party().characters.len(), 3);
         assert_eq!(session.value(Field::Experience(0)), Some(5595));
         assert_eq!(session.value(Field::LevelUps(0)), Some(0));
         assert_eq!(session.value(Field::Allocated(0, 5)), Some(7));
@@ -730,6 +740,38 @@ mod tests {
     }
 
     #[test]
+    fn a_companion_at_camp_is_listed_last_and_exports_its_changes() {
+        let dir = temp_dir("camp");
+        let mut session = open(&dir);
+        // The hero and the companion in the party, then Gale at camp.
+        assert_eq!(session.order(), [0, 1, 2]);
+        assert!(!session.party().characters[2].in_party());
+        assert_eq!(
+            session.summary_of(2),
+            None,
+            "the summary lists only the party"
+        );
+        assert_eq!(session.value(Field::Experience(2)), None);
+        assert_eq!(session.value(Field::Gold(2, 0)), Some(120));
+
+        session.set(Field::Experience(2), 9000, 0.0);
+        assert!(!session.is_dirty(), "there is no experience to change");
+        session.set(Field::LevelUps(2), 1, 10.0);
+        session.set(Field::Allocated(2, 3), 9, 20.0);
+        session.set(Field::Gold(2, 0), 900, 30.0);
+        assert_eq!(session.changes()[0].who, "Gale");
+
+        let exported = session.export(&dir, "Camp edit").unwrap();
+        let reopened = Session::open(&exported).unwrap();
+        let gale = &reopened.party().characters[2];
+        assert_eq!((gale.level, gale.entitled_level), (4, 5));
+        assert_eq!(gale.allocated, Some([0, 5, 6, 9, 2, 4]));
+        assert_eq!(gale.gold_total(), 900);
+        assert_eq!(reopened.party().gold_total(), 3756, "the party's own gold");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn exports_a_new_save_and_leaves_the_original() {
         let dir = temp_dir("export");
         let folder = build::sample_save(&dir, "QuickSave_3").unwrap();
@@ -759,7 +801,7 @@ mod tests {
         let reopened = Session::open(&exported).unwrap();
         assert!(!reopened.is_dirty());
         let hero = &reopened.party().characters[0];
-        assert_eq!((hero.experience, hero.entitled_level), (7100, 6));
+        assert_eq!((hero.experience, hero.entitled_level), (Some(7100), 6));
         assert_eq!(hero.allocated, Some([7, 6, 7, 0, 2, 7]));
         assert_eq!(hero.gold_total(), 8385);
         assert_eq!(reopened.value(Field::Inspiration), Some(4));

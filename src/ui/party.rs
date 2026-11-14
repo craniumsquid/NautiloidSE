@@ -23,8 +23,32 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
     shared(ui, session, actions);
     ui.add_space(8.0);
 
+    // The party, then the companions waiting at camp.
+    let characters = &session.party().characters;
+    let (party, camp): (Vec<usize>, Vec<usize>) = session
+        .order()
+        .iter()
+        .partition(|&&index| characters[index].in_party());
+    cards(ui, session, &party, actions);
+    if !camp.is_empty() {
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new("At camp").font(theme::display(22.0)));
+        ui.label(
+            egui::RichText::new(
+                "Companions who are not in the party. The game keeps experience only for the \
+                 party, so there is none to change here.",
+            )
+            .color(theme::MUTED),
+        );
+        ui.add_space(8.0);
+        cards(ui, session, &camp, actions);
+    }
+}
+
+/// A card for each character, two abreast where there is room.
+fn cards(ui: &mut Ui, session: &Session, characters: &[usize], actions: &mut Vec<Action>) {
     if ui.available_width() >= TWO_COLUMNS_FROM {
-        for pair in session.order().chunks(2) {
+        for pair in characters.chunks(2) {
             ui.columns(2, |columns| {
                 for (column, &index) in columns.iter_mut().zip(pair) {
                     character_card(column, session, index, actions);
@@ -33,7 +57,7 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
             ui.add_space(8.0);
         }
     } else {
-        for &index in session.order() {
+        for &index in characters {
             character_card(ui, session, index, actions);
             ui.add_space(8.0);
         }
@@ -130,7 +154,9 @@ fn subtitle(session: &Session, index: usize, character: &Character) -> String {
                 .join(" / ")
         })
         .unwrap_or_default();
-    if classes.is_empty() {
+    if !character.in_party() {
+        format!("Level {} · At camp", character.level)
+    } else if classes.is_empty() {
         format!("Level {}", character.level)
     } else {
         format!("Level {} · {classes}", character.level)
@@ -152,12 +178,14 @@ fn character_card(ui: &mut Ui, session: &Session, index: usize, actions: &mut Ve
         });
         ui.add_space(4.0);
 
-        widgets::row(
-            ui,
-            "Experience",
-            Some("The total. The game shows experience into the current level."),
-            |ui| field_stepper(ui, session, Field::Experience(index), 100, 84.0, actions),
-        );
+        if character.in_party() {
+            widgets::row(
+                ui,
+                "Experience",
+                Some("The total. The game shows experience into the current level."),
+                |ui| field_stepper(ui, session, Field::Experience(index), 100, 84.0, actions),
+            );
+        }
         let offered = session.value(Field::LevelUps(index)).unwrap_or(0);
         let hint = match offered {
             0 => "The game takes you through the choices for each one.".to_owned(),

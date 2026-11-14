@@ -197,10 +197,11 @@ fn entity_data_parses_and_matches_the_summary() {
         let entities = NewAge::from_lsf(&globals).unwrap();
         let read = party::read(&globals, &entities)
             .unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
+        // Companions at camp have no experience and are not in the summary.
         let mut found: Vec<(u32, u64)> = read
             .characters
             .iter()
-            .map(|c| (c.level, c.experience as u64))
+            .filter_map(|c| Some((c.level, c.experience? as u64)))
             .collect();
         let mut expected: Vec<(u32, u64)> = save
             .info()
@@ -241,7 +242,10 @@ fn party_edits_read_back_from_a_written_save() {
         let first = &before.characters[0];
 
         // One of each edit, on the first character.
-        party::set_experience(&mut entities, first.entity, first.experience + 123).unwrap();
+        let experience = first
+            .experience
+            .expect("the first character is in the party");
+        party::set_experience(&mut entities, first.entity, experience + 123).unwrap();
         party::set_entitled_level(&mut entities, first.entity, first.level + 1).unwrap();
         let points = first.allocated.unwrap()[0];
         party::set_allocated(&mut entities, first.entity, 0, points + 1).unwrap();
@@ -272,7 +276,7 @@ fn party_edits_read_back_from_a_written_save() {
         let after = party::read(&globals, &entities).unwrap();
 
         let mut expected = before.clone();
-        expected.characters[0].experience += 123;
+        expected.characters[0].experience = Some(experience + 123);
         expected.characters[0].entitled_level += 1;
         expected.characters[0].allocated.as_mut().unwrap()[0] += 1;
         if let Some(stack) = gold {

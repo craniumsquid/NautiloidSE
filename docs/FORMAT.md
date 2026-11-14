@@ -104,6 +104,9 @@ Top-level nodes include `Characters`, `Items`, `Journal`, `Story`, `Stats`, `Gam
   Astarion `c7c13742-bacd-460a-8f65-f864fe41f255`, Karlach
   `2c76687d-93a2-477b-8b18-8a14b549304c`, Gale `ad9af97d-75da-406a-ae13-7071c563f604`.
 
+- `VersionHash/Value` is 32 characters of hexadecimal. In one sample it is 31 characters
+  followed by a NUL, before the usual terminating NUL: text can hold a NUL inside.
+
 ## Entity data (`NewAge`)
 
 `Globals.lsf` and every level cache have a top-level `NewAge` node whose one attribute is a
@@ -150,6 +153,21 @@ Not every party member has all of this. A character played as an origin has an e
 in the character creation record (Gale, in the Honour Mode sample), and a game that has only
 just begun has no Inspiration resource yet.
 
+### Who is a character
+
+- The party is whoever owns a `game.experience.v0.ExperienceComponent` row. They also own
+  `game.party.v0.MemberComponent` and `game.v0.PlayerComponent`.
+- A recruited companion who is not in the party keeps a character creation record, a level,
+  an entitled level, ability scores, an inventory and `game.recruit.v0.RecruitedByComponent`,
+  but has **no experience row**: the game keeps experience only for the party. On Patch 8
+  they also own `game.camp.v1.PresenceComponent`. The 8-hour sample has three (Wyll, Lae'zel
+  and Gale); a Patch 4 sample has one at level 1 entitled to level 12.
+- So the editor's characters are the experience owners, then every other owner of a
+  character creation record that also has a level, an entitled level and ability scores.
+- The player's own character has no `RecruitedByComponent`. Its template is not a mark of
+  origin: a Dark Urge Drow and custom Drow characters share one, and a Dark Urge Dragonborn
+  has another, so it follows race or body.
+
 Many rows hold a pair of offsets like these, begin and end, to an array elsewhere in the data
 section. The level-up tables (`game.character_creation.v3.LevelUpComponent` and
 `game.progression.v3.LevelUpComponent`) point at one `LevelUpComponentData` row per level
@@ -186,6 +204,7 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | One character's experience set to 7100, another's Strength total 18 → 20, camp supplies total 660 → 700, checksum recomputed | Loads. Experience shows 600 and no level-up is offered; Strength is still 18 and camp supplies still 660 |
 | Points allocated to Strength at character creation: 0 → 7 for one character, 7 → 9 for another | Loads. Strength shows 15 (was 8) and 20 (was 18) |
 | One character's experience set to 7100 and entitled level 5 → 6; the party's Inspiration 6 → 3; that character's gold stack 3,385 → 5,000 | Loads. A level-up is offered, Inspiration shows 3, and gold shows 5,000 on that character and in the party total |
+| Made in the app on Windows, on a Dark Urge character in another campaign: points allocated to Strength 0 → 2, Intelligence 0 → 2 and Wisdom 2 → 8; gold stack 429 → 1,429 | Loads with the changes in place. The file is byte for byte what this code writes on Linux for the same changes |
 
 Every failure looks the same: the save loads to 100%, drops to the title screen, and shows
 "Server shutting down". Other saves load normally afterwards.

@@ -43,6 +43,8 @@ A <save> is a .lsv file or the save folder that holds one.
       The tables in a document's entity data (its NewAge blob).
   rows <save> <file.lsf> <table> [--limit N]
       A table's rows as 32-bit numbers, with the entity each belongs to.
+  entity <save> <file.lsf> <entity>
+      Every row an entity owns, table by table.
   set <save> <folder> <name> --u32 TABLE:ENTITY:OFFSET[@INDEX]=VALUE,... [--file FILE]
       Write a copy of the save as a new save called <name> under <folder>, with 32-bit
       fields of its entity data changed. ENTITY is the owner's identifier and OFFSET the
@@ -154,6 +156,7 @@ fn run(raw: &[String]) -> Result<()> {
         ),
         "tables" => tables(&Args::parse(rest, &[], &[])?, out),
         "rows" => rows(&Args::parse(rest, &[], &["limit"])?, out),
+        "entity" => entity(&Args::parse(rest, &[], &[])?, out),
         "set" => set(&Args::parse(rest, &[], &["file", "u32"])?, out),
         "check" => check(&Args::parse(rest, &[], &[])?, out),
         "extract" => extract(&Args::parse(rest, &[], &[])?),
@@ -537,10 +540,14 @@ fn print_party(party: &Party, out: &mut impl Write) -> Result<()> {
         } else {
             String::new()
         };
+        let experience = match c.experience {
+            Some(total) => format!("experience {total}"),
+            None => "at camp".to_owned(),
+        };
         writeln!(
             out,
-            "    level {}{pending}, experience {}, template {}",
-            c.level, c.experience, c.template
+            "    level {}{pending}, {experience}, template {}",
+            c.level, c.template
         )?;
         let totals: Vec<String> = party::ABILITIES
             .iter()
@@ -775,6 +782,29 @@ fn rows(args: &Args, out: &mut impl Write) -> Result<()> {
             "… {} more (raise --limit to see them)",
             table.rows - limit
         )?;
+    }
+    Ok(())
+}
+
+fn entity(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(3, "entity <save> <file.lsf> <entity>")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let entities = NewAge::from_lsf(&save.lsf(&args.positional[1])?)?;
+    let id = value::Uuid::parse(&args.positional[2])
+        .ok_or_else(|| anyhow!("{} is not an entity's identifier", args.positional[2]))?;
+    let index = entities
+        .entity_index(id)
+        .ok_or_else(|| anyhow!("the document has no entity {id}"))?;
+    for (table_id, table) in entities.tables().iter().enumerate() {
+        if let Some(row) = entities.row_of(table_id, index) {
+            writeln!(
+                out,
+                "{:<70} @{:<9} {}",
+                table.name,
+                entities.row_offset(table_id, row),
+                row_text(entities.row(table_id, row))
+            )?;
+        }
     }
     Ok(())
 }
