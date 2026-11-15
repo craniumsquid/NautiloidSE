@@ -27,12 +27,18 @@ The party, and the companions waiting at camp:
   shows the camp supplies it is worth, and the game's supplies total follows it. Items have
   the names players see, read from your own install of the game; nothing from the game is
   shipped with the editor. Items added by mods keep their internal names for now.
+- **Adding items**, from the game's own list of items, searched by name. A new item is a
+  copy of one the character (or the camp chest) already holds, made into the item you pick:
+  a weapon from a weapon, armour from armour worn the same way, a potion from a potion, and
+  anything else from something of the same kind. New items go at the end of the inventory.
+  A scroll can only be a copy of one already held, since it keeps its spell with it.
 - **Approval**: what each companion thinks of your character.
 
 Each of these has been changed in a save that then loaded in the game (build
 `4.1.1.7631656`) with the new value. For a companion at camp that is so for ability points;
 a level-up or a change of gold there is the same field as a party member's but has not been
-tried.
+tried. Adding items was tried with the command-line tool, which adds them the same way the
+app does; adding from the app itself has not been tried in the game yet.
 
 It also lists the mods a save asks for, marked by whether your game has them active. That
 list is read only: the game's own mod manager is the place to change it.

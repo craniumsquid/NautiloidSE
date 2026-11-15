@@ -19,6 +19,7 @@ pub mod thumbs;
 pub mod toast;
 pub mod widgets;
 
+use crate::party::Holder;
 use crate::saves::{self, Dropped};
 use crate::session::{Field, Session};
 use browser::BrowserState;
@@ -81,7 +82,7 @@ impl Tab {
     pub fn of(field: Field) -> Tab {
         match field {
             Field::Approval(..) => Tab::Approval,
-            Field::Amount(..) => Tab::Inventory,
+            Field::Amount(..) | Field::Add(..) => Tab::Inventory,
             _ => Tab::Party,
         }
     }
@@ -125,6 +126,10 @@ pub enum Action {
     Reveal(PathBuf),
     /// Ask where the game is, for the names players see.
     PickGameFolder,
+    /// Choose items from the game's to add for this holder.
+    AskAddItem(Holder),
+    /// Add one more of the item with these stats for this holder.
+    AddItem(Holder, String),
 }
 
 pub struct EditorApp {
@@ -688,6 +693,19 @@ impl EditorApp {
                 }
             }
             Action::CloseDialog => self.dialog = None,
+            Action::AskAddItem(holder) => {
+                self.dialog = Some(Dialog::AddItem {
+                    holder,
+                    query: String::new(),
+                })
+            }
+            Action::AddItem(holder, stats) => {
+                if let Some(session) = &mut self.session {
+                    if let Err(why) = session.add_item(holder, &stats, time) {
+                        self.toasts.push(Toast::new(why, Tone::Problem));
+                    }
+                }
+            }
             Action::Reveal(path) => self.platform.reveal(&path),
         }
     }

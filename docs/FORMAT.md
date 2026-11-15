@@ -311,7 +311,8 @@ command, which reads only each package's header and file list):
   is a template: `MapKey` (as text; saves store it as a UUID), `Name`, `Type` (`item` for
   items), `Stats`, `DisplayName` and `Description` (handles), `Icon`, and
   `ParentTemplateId`, whose values fill in any the template leaves out. About 9,300 are
-  items, 9,100 of them with an English name.
+  items, 9,100 of them with an English name. `StoryItem` (a Bool, also inherited) marks the
+  items quests count on; 24 of the 2,700 items the editor offers for adding have it.
 - The stats files are text: `new entry "NAME"`, `type`, `using "PARENT"` (filling in what
   the entry leaves out) and `data "Key" "Value"`, including `RootTemplate`, `Rarity` and
   `ObjectCategory`. Several templates can share one entry; its `RootTemplate` is the main one.

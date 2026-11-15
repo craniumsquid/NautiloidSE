@@ -67,6 +67,9 @@ pub struct Addition {
     count: u32,
 }
 
+/// Which of a holder's items a new one can be made from.
+type Fits<'a> = Box<dyn Fn(&Pattern) -> bool + 'a>;
+
 /// An item a holder carries that new items can be copied from.
 #[derive(Clone, Debug)]
 struct Pattern {
@@ -348,7 +351,10 @@ impl Session {
         holder: party::Holder,
         item: &CatalogItem,
     ) -> Result<(crate::value::Uuid, bool), String> {
-        let who = self.holder_name(holder);
+        let (who, carry, not_worn) = match holder {
+            party::Holder::CampChest => ("The camp chest".to_owned(), "hold", ""),
+            _ => (self.holder_name(holder), "carry", ", not worn or equipped"),
+        };
         let held: Vec<&Pattern> = self
             .patterns
             .iter()
@@ -358,11 +364,12 @@ impl Session {
             return Ok((same.entity, true));
         }
         let potion = |category: &str| category.starts_with("Potion");
-        let (fits, needs): (Box<dyn Fn(&Pattern) -> bool>, String) = match item.kind {
+        let (fits, needs): (Fits, String) = match item.kind {
             _ if item.category.contains("MagicScroll") => {
                 return Err(format!(
-                    "A scroll keeps its spell with it, so {who} needs to carry one of these \
-                     already to copy."
+                    "A scroll keeps its spell with it, so {} needs to {carry} one of these \
+                     already to copy.",
+                    self.holder_in_sentence(holder)
                 ))
             }
             Kind::Weapon => (Box::new(|p| p.kind == Kind::Weapon), "a weapon".to_owned()),
@@ -380,7 +387,7 @@ impl Session {
             ),
             _ => {
                 return Err(format!(
-                    "{who} needs to carry one of these already: there is nothing like it to \
+                    "{who} needs to {carry} one of these already: there is nothing like it to \
                      make one from."
                 ))
             }
@@ -388,9 +395,7 @@ impl Session {
         held.iter()
             .find(|p| p.root && fits(p))
             .map(|p| (p.entity, false))
-            .ok_or_else(|| {
-                format!("{who} needs to carry {needs} to make it from, not worn or equipped.")
-            })
+            .ok_or_else(|| format!("{who} needs to {carry} {needs} to make it from{not_worn}."))
     }
 
     /// Items to add, in the order they were asked for. How many of each is [`Field::Add`].
@@ -436,6 +441,26 @@ impl Session {
         self.set(field, now + 1, time);
         self.last_edit = None;
         Ok(index)
+    }
+
+    /// What an addition is made from, by name: the item its holder carries that each new
+    /// one is a copy of.
+    pub fn addition_source(&self, index: usize) -> Option<String> {
+        let addition = self.additions.get(index)?;
+        self.original
+            .inventories
+            .iter()
+            .flat_map(|i| &i.items)
+            .find(|item| item.entity == addition.pattern)
+            .map(|item| self.item_name(item))
+    }
+
+    /// How many of `stats` are to be added for `holder`.
+    pub fn added(&self, holder: party::Holder, stats: &str) -> u32 {
+        self.additions
+            .iter()
+            .find(|a| a.holder == holder && a.item.stats == stats)
+            .map_or(0, |a| a.count)
     }
 
     /// Whether items are named as the game names them.
@@ -700,6 +725,14 @@ impl Session {
                 .map(Character::display_name)
                 .unwrap_or_default(),
             party::Holder::CampChest => "Camp chest".to_owned(),
+        }
+    }
+
+    /// Who holds an inventory, as put in the middle of a sentence: "Tav", "the camp chest".
+    pub fn holder_in_sentence(&self, holder: party::Holder) -> String {
+        match holder {
+            party::Holder::CampChest => "the camp chest".to_owned(),
+            _ => self.holder_name(holder),
         }
     }
 

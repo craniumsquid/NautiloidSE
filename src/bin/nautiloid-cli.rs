@@ -1115,6 +1115,12 @@ fn catalog(args: &Args, out: &mut impl Write) -> Result<()> {
         catalog.items.len(),
         started.elapsed().as_secs_f64()
     )?;
+    let listed = catalog.listed().count();
+    let story = catalog.listed().filter(|i| i.story).count();
+    writeln!(
+        out,
+        "{listed} offered for adding, {story} of them story items"
+    )?;
     let find = args.get("find").map(str::to_lowercase);
     let limit = args.number("limit")?.unwrap_or(40);
     let matching = catalog.items.iter().filter(|i| match &find {
@@ -1128,12 +1134,13 @@ fn catalog(args: &Args, out: &mut impl Write) -> Result<()> {
     for item in matching.take(limit) {
         writeln!(
             out,
-            "{:<36} {:<34} {:<7} {:<10} {:<18} {}",
+            "{:<36} {:<34} {:<7} {:<10} {:<18} {:<5} {}",
             item.display,
             item.stats,
             item.kind.label(),
             item.rarity,
             item.category,
+            if item.story { "story" } else { "" },
             item.template
         )?;
     }

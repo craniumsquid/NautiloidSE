@@ -89,6 +89,8 @@ pub struct CatalogItem {
     /// `ObjectCategory` for objects, `Slot` for armour, `WeaponType`... whatever the stats
     /// entry says the item is, when it says.
     pub category: String,
+    /// Whether the game marks it a story item: one its quests may count on.
+    pub story: bool,
 }
 
 /// The game's item templates.
@@ -111,6 +113,8 @@ struct Template {
     display: String,
     description: String,
     icon: String,
+    /// `StoryItem`, when the template says.
+    story: Option<bool>,
     parent: String,
 }
 
@@ -148,6 +152,10 @@ fn read_templates(bytes: &[u8], into: &mut HashMap<String, Template>) -> Result<
                 display: text_of(&lsf, node, "DisplayName"),
                 description: text_of(&lsf, node, "Description"),
                 icon: text_of(&lsf, node, "Icon"),
+                story: lsf
+                    .get(node, "StoryItem")
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v != 0),
                 parent: text_of(&lsf, node, "ParentTemplateId").to_lowercase(),
             },
         );
@@ -286,6 +294,17 @@ impl Catalog {
             }
             String::new()
         };
+        let story = |key: &str| -> bool {
+            let mut current = templates.get(key);
+            for _ in 0..32 {
+                let Some(template) = current else { break };
+                if let Some(story) = template.story {
+                    return story;
+                }
+                current = templates.get(&template.parent);
+            }
+            false
+        };
         let mut items = Vec::new();
         for (key, template) in &templates {
             if template.kind != "item" {
@@ -313,6 +332,7 @@ impl Catalog {
                 kind: entry.and_then(|e| e.file).unwrap_or(Kind::Other),
                 rarity: value("Rarity"),
                 category,
+                story: story(key),
             });
         }
 
@@ -355,7 +375,13 @@ impl Catalog {
         let mut listed: Vec<usize> = by_stats
             .values()
             .copied()
-            .filter(|&i| !items[i].display.is_empty() && items[i].kind != Kind::Other)
+            // Names that start "%%%" mark templates the game doesn't use.
+            .filter(|&i| {
+                let item = &items[i];
+                !item.display.is_empty()
+                    && !item.display.starts_with("%%%")
+                    && item.kind != Kind::Other
+            })
             .collect::<HashSet<usize>>()
             .into_iter()
             .collect();
@@ -522,6 +548,7 @@ pub mod build {
                         handle: value.into(),
                     },
                 ),
+                "StoryItem" => node.attr(field, DataType::Bool, Value::Bool(value == "true")),
                 _ => node.attr(field, DataType::FixedString, Value::Text(value.into())),
             };
         }
@@ -664,7 +691,11 @@ mod tests {
             .child(template(
                 "aaaa0000-0000-0000-0000-000000000001",
                 "BASE_Potion",
-                &[("Type", "item"), ("Icon", "Item_Potion_New")],
+                &[
+                    ("Type", "item"),
+                    ("Icon", "Item_Potion_New"),
+                    ("StoryItem", "true"),
+                ],
             ))
             .child(template(
                 "aaaa0000-0000-0000-0000-000000000004",
@@ -723,6 +754,7 @@ mod tests {
             (Kind::Object, "Common")
         );
         assert_eq!(potion.category, "Potion");
+        assert!(potion.story, "a story item, as its parent is");
 
         let dagger = catalog
             .by_template("AAAA0000-0000-0000-0000-000000000004")
@@ -731,6 +763,7 @@ mod tests {
             (dagger.kind, dagger.rarity.as_str()),
             (Kind::Weapon, "Uncommon")
         );
+        assert!(!dagger.story);
         // The replaced parent has no name of its own any more.
         assert_eq!(
             catalog

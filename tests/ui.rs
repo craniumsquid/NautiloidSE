@@ -199,6 +199,109 @@ fn items_take_the_names_from_the_game_once_it_is_found() {
 }
 
 #[test]
+fn adds_items_from_the_games_files() {
+    use nautiloid_save_editor::catalog::build::{game_folder_with, GameItem};
+    use nautiloid_save_editor::catalog::Kind;
+    use nautiloid_save_editor::session::Session;
+    let (dir, mut ui) = open_sample("add-items");
+    let item = |template, stats, display, kind, category| GameItem {
+        template,
+        stats,
+        display,
+        kind,
+        category,
+    };
+    let game = dir.join("Baldurs Gate 3");
+    game_folder_with(
+        &game,
+        &[
+            item(
+                "00000000-0000-0000-0000-00000000cccc",
+                "OBJ_Rope",
+                "Rope",
+                Kind::Object,
+                "Tool",
+            ),
+            item(
+                "00000000-0000-0000-0000-00000000ffff",
+                "OBJ_Rope_Silk",
+                "Silk Rope",
+                Kind::Object,
+                "Tool",
+            ),
+            item(
+                "00000000-0000-0000-0000-000000001111",
+                "WPN_Longsword_1",
+                "Longsword +1",
+                Kind::Weapon,
+                "",
+            ),
+        ],
+    )
+    .unwrap();
+
+    // Without the game's files there is nothing to choose from.
+    ui.click("Inventory");
+    ui.click("Add items…");
+    assert!(ui.app.dialog().is_none());
+    ui.platform.borrow_mut().folder_to_pick = Some(game.clone());
+    ui.click("Choose game folder…");
+    ui.settle();
+
+    ui.click("Add items…");
+    assert!(ui.sees("Add items for Tav"));
+    assert!(ui.sees("search the game's 3 items"));
+    ui.type_text("rope");
+    assert!(ui.sees("Silk Rope"));
+    assert!(ui.sees("Object · Tool · OBJ_Rope_Silk"));
+    // The rope Tav holds first, then the silk rope made from it.
+    ui.click_nth("Add", 0);
+    ui.click_nth("Add", 0);
+    ui.click_nth("Add", 1);
+    assert!(ui.sees("2 added"));
+    assert!(ui.sees("1 added"));
+    ui.snapshot("16-add-items");
+
+    // Nothing to make a sword from: the reason is given and there is no button.
+    ui.press(egui::Key::A, egui::Modifiers::COMMAND);
+    ui.type_text("long");
+    assert!(ui.sees("Tav needs to carry a weapon"));
+    assert!(ui.find_all("Add").is_empty());
+    ui.type_text("zzz");
+    assert!(ui.sees("No item in the game's files is called that."));
+    ui.click("Done");
+    assert!(ui.app.dialog().is_none());
+
+    // What is to be added is listed, can be changed, and is on this tab's changes.
+    assert!(ui.sees("ADDING (2)"));
+    assert!(ui.sees("A copy of the one Tav holds · OBJ_Rope"));
+    assert!(ui.sees("Made from Tav's Rope · OBJ_Rope_Silk"));
+    let whats: Vec<String> = ui
+        .app
+        .session()
+        .unwrap()
+        .changes()
+        .iter()
+        .map(|c| c.what.clone())
+        .collect();
+    assert_eq!(whats, ["Add Rope", "Add Silk Rope"]);
+    ui.snapshot("16b-adding");
+
+    ui.click("Export as a new save…");
+    ui.click("Export");
+    let exported =
+        Session::open(&dir.join("Tav-1234__Shattered Sanctum - 8h 02m - Edited")).unwrap();
+    let tav: Vec<&str> = exported.original().inventories[0]
+        .items
+        .iter()
+        .map(|i| i.stats.as_str())
+        .collect();
+    assert_eq!(tav.iter().filter(|s| **s == "OBJ_Rope").count(), 3);
+    assert_eq!(tav.iter().filter(|s| **s == "OBJ_Rope_Silk").count(), 1);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn exporting_an_honour_mode_save_says_it_is_untried() {
     let dir = temp_dir("honour");
     sample_saves(&dir);

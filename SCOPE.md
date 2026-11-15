@@ -53,20 +53,35 @@ Built (see Status).
      and the game takes the player through the choices.
    - Ability scores are changed through the points allocated to each ability; the game adds
      the character's other bonuses on top.
-   - Gold is per character. A character who carries none can't be given any until items can
-     be added (Phase 3).
+   - Gold is per character. A character who carries none can't be given any: gold is a
+     stack, and stacks can't be added yet.
 2. **Inventory.** Built. Stack quantities, for each character and the camp chest. Camp
-   supplies belong here: the game works the total out from the food items. Items go by the
-   game's internal names, tidied; the names the game shows come with the catalog in Phase 3.
+   supplies belong here: the game works the total out from the food items. Items have the
+   names the game shows, read from the player's own install, or else their internal names,
+   tidied.
 3. **Approval.** Built. Each companion's approval of the player's character.
 4. **Mods.** Built, read only. The save's list of required mods, compared with the mods the
    game has active. Removing a mod from a save was built and then dropped: the game's own
    mod manager handles that well enough.
 
-### Phase 3: later
+### Phase 3: adding items
 
-- Adding items from a bundled catalog of template IDs and names. The catalog is built from the
-  game's data by a script; game files are not shipped.
+Built. The Inventory tab's **Add items…** searches the game's items and adds them to a
+character or the camp chest, up to 20 of each per export.
+
+- The list of items is read from the player's own install of the game when the app starts:
+  the root templates, the item stats and the English language file. Nothing from the game is
+  shipped. The app finds a Steam install by itself, or asks for the game's folder.
+- A new item is a copy of one the holder already carries, made into the chosen item by its
+  template and stats. A weapon is made from a weapon, armour from armour worn in the same
+  slot, a potion from a potion and anything else from an item of the same category. Worn,
+  equipped, story and stacked items, and containers, are not copied.
+- A scroll keeps its spell in records of its own, so a scroll can only be a plain copy of one
+  the holder carries.
+- Items the game marks as story items are offered with a warning that a quest may count on
+  there being only one.
+- Not done: items from mods, whose names are in the mods' own files; scrolls of spells the
+  holder doesn't carry; stacks, gold among them.
 
 ### Stretch goal
 
@@ -110,7 +125,12 @@ not been tried in the game:
 - Not yet tried: a level-up or a change of gold for a companion at camp. Both are the same
   fields as a party member's.
 
-With the Mods tab the four Phase 2 tabs are done. Phase 3, adding items, is next.
+With the Mods tab the four Phase 2 tabs are done, and Phase 3, adding items, is built.
+Items added by the command-line tool, which adds them the same way the app does, loaded in
+the game at the end of the inventory: plain copies of a scroll and other items, and items
+made from others (a longsword +1 and a dagger +1 from daggers, the Cap of Wrath from a hat,
+the Adamantine Shield from a shield, potions from potions). Adding from the app itself has
+not been tried in the game yet.
 
 Phase 0 is built and passes on all eleven sample saves:
 

@@ -1,5 +1,5 @@
-//! The Inventory tab: what each character and the camp chest hold, and how many each stack
-//! holds.
+//! The Inventory tab: what each character and the camp chest hold, how many each stack
+//! holds, and items to add.
 
 use super::game::{self, GameFiles};
 use super::party::field_stepper;
@@ -24,7 +24,7 @@ fn detail(item: &Item) -> String {
 pub fn show(ui: &mut Ui, session: &Session, game: &GameFiles, actions: &mut Vec<Action>) {
     ui.label(egui::RichText::new("Inventory").font(theme::display(30.0)));
     ui.label(
-        egui::RichText::new("What everyone carries, and how many each stack holds.")
+        egui::RichText::new("What everyone carries, how many each stack holds, and items to add.")
             .color(theme::MUTED),
     );
     ui.add_space(10.0);
@@ -71,16 +71,30 @@ pub fn show(ui: &mut Ui, session: &Session, game: &GameFiles, actions: &mut Vec<
     let mut search = ui
         .data(|d| d.get_temp::<String>(search_id))
         .unwrap_or_default();
-    ui.add(
-        egui::TextEdit::singleline(&mut search)
-            .hint_text("Search items")
-            .desired_width(280.0)
-            .margin(Margin::symmetric(10.0, 7.0)),
-    );
+    let inventory = &party.inventories[chosen];
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut search)
+                .hint_text("Search items")
+                .desired_width(280.0)
+                .margin(Margin::symmetric(10.0, 7.0)),
+        );
+        let can_add = session.catalog().is_some();
+        let add = ui
+            .add_enabled_ui(can_add, |ui| {
+                widgets::button(ui, "Add items…", Kind::Secondary)
+            })
+            .inner;
+        if add.clicked() {
+            actions.push(Action::AskAddItem(inventory.holder));
+        }
+        if !can_add {
+            add.on_disabled_hover_text("Needs the game's files, for what items there are.");
+        }
+    });
     ui.data_mut(|d| d.insert_temp(search_id, search.clone()));
     ui.add_space(8.0);
-
-    let inventory = &party.inventories[chosen];
+    adding(ui, session, inventory.holder, actions);
     let wanted = search.trim().to_lowercase();
     let matches = |item: &Item| {
         wanted.is_empty()
@@ -147,4 +161,40 @@ pub fn show(ui: &mut Ui, session: &Session, game: &GameFiles, actions: &mut Vec<
                 }
             });
     });
+}
+
+/// The items to be added for `holder`, with how many of each.
+fn adding(ui: &mut Ui, session: &Session, holder: Holder, actions: &mut Vec<Action>) {
+    let mine: Vec<usize> = (0..session.additions().len())
+        .filter(|&i| session.additions()[i].holder == holder)
+        .collect();
+    if mine.is_empty() {
+        return;
+    }
+    let who = session.holder_in_sentence(holder);
+    widgets::card(ui, |ui| {
+        ui.set_width(ui.available_width());
+        widgets::section_title(ui, &format!("Adding ({})", mine.len()));
+        ui.label(
+            egui::RichText::new("New items go at the end of the inventory when you export.")
+                .font(theme::body(12.5))
+                .color(theme::MUTED),
+        );
+        ui.add_space(2.0);
+        for index in mine {
+            let addition = &session.additions()[index];
+            let source = session.addition_source(index).unwrap_or_default();
+            let hint = match addition.same {
+                true => format!("A copy of the one {who} holds · {}", addition.item.stats),
+                false => format!("Made from {who}'s {source} · {}", addition.item.stats),
+            };
+            widgets::row(
+                ui,
+                &session.catalog_name(&addition.item),
+                Some(&hint),
+                |ui| field_stepper(ui, session, Field::Add(index), 1, 64.0, actions),
+            );
+        }
+    });
+    ui.add_space(8.0);
 }

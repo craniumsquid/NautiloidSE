@@ -72,3 +72,76 @@ fn most_items_in_the_saves_are_named() {
         );
     }
 }
+
+#[test]
+fn items_can_be_added_to_the_saves() {
+    use nautiloid_save_editor::session::Session;
+    use std::sync::Arc;
+    let Some(catalog) = catalog() else { return };
+    let Some(saves) = std::env::var_os("NAUTILOID_SAVES") else {
+        return;
+    };
+    let catalog = Arc::new(catalog);
+    let out = std::env::temp_dir().join(format!("nautiloid-add-{}", std::process::id()));
+    std::fs::create_dir_all(&out).unwrap();
+    let mut tried = 0;
+    for entry in std::fs::read_dir(saves).unwrap().flatten() {
+        let Ok(mut session) = Session::open(&entry.path()) else {
+            continue;
+        };
+        if session.summary().honour_mode {
+            continue;
+        }
+        session.set_catalog(catalog.clone());
+        let Some(inventory) = session.original().inventories.first() else {
+            continue;
+        };
+        let holder = inventory.holder;
+        let before: Vec<String> = inventory.items.iter().map(|i| i.stats.clone()).collect();
+        // One of each kind that can be made from something the holder carries, and a plain
+        // copy of something it carries.
+        let mut wanted: Vec<String> = Vec::new();
+        for kind in [Kind::Weapon, Kind::Armor, Kind::Object] {
+            let made = catalog.listed().find(|item| {
+                item.kind == kind && matches!(session.pattern_for(holder, item), Ok((_, false)))
+            });
+            wanted.extend(made.map(|item| item.stats.clone()));
+        }
+        let copied = catalog
+            .listed()
+            .find(|item| matches!(session.pattern_for(holder, item), Ok((_, true))));
+        wanted.extend(copied.map(|item| item.stats.clone()));
+        if wanted.is_empty() {
+            continue;
+        }
+        for (time, stats) in wanted.iter().enumerate() {
+            session.add_item(holder, stats, time as f64 * 10.0).unwrap();
+        }
+        let exported = session
+            .export(&out, &format!("Added {tried}"))
+            .unwrap_or_else(|e| panic!("{}: {e:#}", entry.path().display()));
+        let reopened = Session::open(&exported).unwrap();
+        let after: Vec<String> = reopened
+            .original()
+            .inventories
+            .iter()
+            .find(|i| i.holder == holder)
+            .unwrap()
+            .items
+            .iter()
+            .map(|i| i.stats.clone())
+            .collect();
+        for stats in &wanted {
+            let count = |items: &[String]| items.iter().filter(|s| *s == stats).count();
+            assert_eq!(
+                count(&after),
+                count(&before) + 1,
+                "{}: {stats}",
+                entry.path().display()
+            );
+        }
+        tried += 1;
+    }
+    std::fs::remove_dir_all(&out).unwrap();
+    assert!(tried > 0, "no save had items to add");
+}
