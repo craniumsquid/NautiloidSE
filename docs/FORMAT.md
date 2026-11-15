@@ -255,6 +255,9 @@ What adding an item would have to touch, from an unstacked scroll in a character
 - **Its owner.** The item's `game.v0.OwneeCurrentComponent` points at the owner, and the
   owner's `IsCurrentOwner`, `IsLatestOwner` and `IsOriginalOwner` components each hold a
   list of offsets to what it owns. The scroll was also on two hotbar slots.
+- **Stacks.** A stack is one item with a count. When the game merged two single scrolls, it
+  kept one entity, gave it a `NewStackComponent` (an offset to a `Stack` record: one item,
+  one `StackEntry` with the amount 2) and a `StackMemberComponent`, and deleted the other.
 - **Not an item.** A character can be carried too: one sample has a corpse in Karlach's
   pack, with a character creator and no `game.item.v0.ItemComponent`.
 
@@ -317,6 +320,7 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | Only the scroll's `MemberData` copied to the loose data and pointed at | Hangs at 75% |
 | Only the scroll's slot record copied to the loose data and pointed at | Hangs at 75% |
 | Only the scroll's identifier copied to the loose data, and its slot record pointed at that | Loads |
+| The second version's copy moved in the game to another character who had the same scroll, then saved by the game | The game merged them into one stack of 2 on that character, as it does for any two such scrolls, and its own save passes every check. Its identifier is gone, as a merged item's is |
 | Made in the app: two companions' approval 0 → 50; a companion at camp's Strength points 0 → 18; a stack of healing potions 1 → 21; a stack of fish in the camp chest, worth 4 camp supplies each, 2 → 14 | Loads. The character sheet shows approval as "High (50)". Camp supplies show 335, up from 287 by the 48 the twelve fish are worth. After the companion is swapped into the party and the game saves again, that save has approval at 50, the stacks at 21 and 14, the companion's Strength at 26 with the 18 points kept, and experience awarded to them to match the party |
 
 Every failure looks the same: the save loads to 100%, drops to the title screen, and shows
