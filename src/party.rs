@@ -137,6 +137,8 @@ pub struct Item {
     pub in_container: bool,
     /// For food, the camp supplies one of it is worth.
     pub supply: Option<u32>,
+    /// Whether it is marked as wares, for selling.
+    pub wares: bool,
 }
 
 /// Who holds an inventory.
@@ -292,6 +294,32 @@ fn templates(globals: &Lsf) -> HashMap<Uuid, String> {
 
 /// The game's name for every item, by entity identifier, from the node tree. The item
 /// factory lists its creators and its items in the same order.
+/// The items marked as wares: bit 33 of the `Flags` on their item nodes.
+fn wares(globals: &Lsf) -> std::collections::HashSet<Uuid> {
+    let mut out = std::collections::HashSet::new();
+    let (Some(creators), Some(items)) = (
+        globals.find(&["Items", "ItemFactory", "Creators"]),
+        globals.find(&["Items", "ItemFactory", "Items"]),
+    ) else {
+        return out;
+    };
+    let creators = globals.children_named(creators, "Creator");
+    let items = globals.children_named(items, "Item");
+    for (creator, item) in creators.zip(items) {
+        let marked = matches!(
+            globals.get(item, "Flags"),
+            Some(crate::value::Value::ULongLong(flags)) if flags & crate::items::WARES != 0
+        );
+        if let (true, Some(entity)) = (
+            marked,
+            globals.get(creator, "Entity").and_then(|v| v.as_uuid()),
+        ) {
+            out.insert(entity);
+        }
+    }
+    out
+}
+
 fn stats_names(globals: &Lsf) -> HashMap<Uuid, String> {
     let mut out = HashMap::new();
     let (Some(creators), Some(items)) = (
@@ -620,6 +648,7 @@ pub fn read(globals: &Lsf, entities: &NewAge) -> Result<Party> {
 
     // Everything else they hold, and what is in the camp chest.
     let stats = stats_names(globals);
+    let wares = wares(globals);
     let chest = entities
         .table(tables::CAMP_CHEST)
         .and_then(|table| entities.owned_rows(table).next())
@@ -660,6 +689,7 @@ pub fn read(globals: &Lsf, entities: &NewAge) -> Result<Party> {
             supply: supply
                 .and_then(|table| entities.row_of(table, item).map(|row| (table, row)))
                 .map(|(table, row)| u32_of(entities.row(table, row), 0)),
+            wares: wares.contains(&id),
         });
     }
     let mut inventories: Vec<Inventory> = held
@@ -1591,6 +1621,14 @@ mod tests {
             (apples.stats.as_str(), apples.amount, apples.supply),
             ("CONS_FOOD_Fruit_Apple", 4, Some(3))
         );
+        // Only the rope is marked as wares.
+        let wares: Vec<&str> = party.inventories[0]
+            .items
+            .iter()
+            .filter(|i| i.wares)
+            .map(|i| i.stats.as_str())
+            .collect();
+        assert_eq!(wares, ["OBJ_Rope"]);
 
         set_amount(&mut entities, uuid(POTIONS), 12).unwrap();
         set_amount(&mut entities, uuid(APPLES), 40).unwrap();

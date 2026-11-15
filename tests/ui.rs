@@ -290,6 +290,8 @@ fn adds_items_from_the_games_files() {
     // A single item says why its count can't change, and has a + to add more instead: the
     // pluses are the three being added, the stack's, the bag's and the rope's.
     assert!(ui.sees("the save keeps no count for these"));
+    // The rope Tav has is marked as wares; the game's mark shows beside it.
+    assert!(ui.sees("OBJ_Rope · wares"));
     ui.click_nth("+", 5);
     assert_eq!(
         ui.app

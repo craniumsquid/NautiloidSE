@@ -18,6 +18,9 @@ fn detail(item: &Item) -> String {
     if item.in_container {
         detail.push_str(" · in a container");
     }
+    if item.wares {
+        detail.push_str(" · wares");
+    }
     detail
 }
 
