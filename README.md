@@ -30,7 +30,8 @@ The party, and the companions waiting at camp:
 - **Adding items**, any of the game's items, searched by name. A new item is a copy of the
   closest item anywhere in the save (the same item if anyone has one, else one like it,
   equipped or not, the party's or anyone else's), made into the item you pick. A scroll is
-  made from another scroll, and the game gives it its spell. An item that stacks goes in as one stack of
+  made from another scroll where the save has one, and the game gives it its spell. New
+  items are not marked as wares, even when what they are copied from is. An item that stacks goes in as one stack of
   as many as you ask for; a single item has a + beside it to add more. New items go at the
   end of the inventory.
 - **Approval**: what each companion thinks of your character.
@@ -40,8 +41,8 @@ Each of these has been changed in a save that then loaded in the game (build
 a level-up or a change of gold there is the same field as a party member's but has not been
 tried. Adding items was tried in every way the app uses: copies of what the holder carries
 and of what NPCs carry or wear, items made from another of the same kind or of another kind,
-new stacks, scrolls of other spells, and copies between a character and the camp chest. A
-scroll made from something that isn't a scroll hasn't been tried; the app says so.
+new stacks, scrolls of other spells (from another scroll or from anything else), and copies
+between a character and the camp chest.
 
 An exported quicksave or autosave is written as a manual save, so the game's load menu lists
 it by its name (it lists its own autosaves as "Autosave 4" whatever they're called). An

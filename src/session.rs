@@ -65,8 +65,6 @@ pub struct Plan {
     /// For a scroll made from another item: the spell it will cast. The copy leaves out the
     /// donor's spell, and the game fills this one in from the template.
     pub spell: Option<String>,
-    /// Why this way of making the item hasn't been tried in the game yet, if it hasn't.
-    pub untried: Option<&'static str>,
 }
 
 /// An item to add.
@@ -396,8 +394,6 @@ impl Session {
         Ok(Plan {
             donor: source.donor.entity,
             same,
-            untried: (spell.is_some() && source.donor.spell.is_none())
-                .then_some("a scroll made from something that isn't one"),
             spell,
         })
     }
@@ -491,9 +487,6 @@ impl Session {
         }
         if addition.stacked {
             hint.push_str(", as one stack");
-        }
-        if addition.plan.untried.is_some() {
-            hint.push_str(" (not yet tried in the game)");
         }
         hint
     }
@@ -1457,12 +1450,12 @@ mod tests {
         assert!(session
             .addition_hint(sword)
             .starts_with("Made from a Longsword someone outside the party has"));
-        // There is no scroll anywhere, so a scroll is made from something else, which hasn't
-        // been tried in the game; its spell is left for the game to fill in.
+        // There is no scroll anywhere, so a scroll is made from something else; its spell is
+        // left for the game to fill in.
         let catalog = session.catalog().unwrap();
         let fireball = catalog.by_stats("OBJ_Scroll_Fireball").unwrap().clone();
         let plan = session.pattern_for(hero, &fireball).unwrap();
-        assert!(plan.untried.is_some());
+        assert!(plan.spell.is_some());
         assert_eq!(plan.donor, uuid(ROPE));
         // The camp chest gets a copy of the hero's rope.
         let chest_rope = session

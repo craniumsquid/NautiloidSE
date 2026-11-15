@@ -346,16 +346,6 @@ fn found_item(
                     .font(theme::body(12.0))
                     .color(theme::MUTED),
             );
-            if let Ok(Some(untried)) = pattern.as_ref().map(|p| p.untried) {
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(format!("Not yet tried in the game: {untried}."))
-                            .font(theme::body(12.0))
-                            .color(theme::ACCENT),
-                    )
-                    .wrap(),
-                );
-            }
             if let (Some(story), Ok(_)) = (story, &pattern) {
                 ui.add(
                     egui::Label::new(

@@ -84,6 +84,9 @@ const META_ID: &str = "game.spell.v0.MetaId";
 /// spell in from its template when the save loads: the spell book, and the mark that says
 /// the item's data has been filled in already.
 pub const SPELL_ROWS: [&str; 2] = [SPELL_BOOK, "game.v0.InventoryItemDataPopulatedComponent"];
+/// Among the `Flags` of an item's node: marked as wares, for selling. The game marks loot
+/// such as cups, plates and enemies' weapons so when it is picked up, and the player can.
+pub const WARES: u64 = 1 << 33;
 /// What an offset holds when it points at nothing.
 const NONE: u64 = u64::MAX;
 
@@ -1354,7 +1357,15 @@ fn copy_nodes(globals: &mut Lsf, item: Uuid, copy: Uuid) -> Result<()> {
         .parent(node)
         .ok_or_else(|| anyhow!("an item with no list"))?;
     let new_creator = globals.copy_node(creator, creators)?;
-    globals.copy_node(node, items)?;
+    let new_node = globals.copy_node(node, items)?;
+    // A new item is not marked as wares, whatever its donor is.
+    if let Some(flags) = globals.attr(new_node, "Flags") {
+        if let Value::ULongLong(value) = globals.value(flags)? {
+            if value & WARES != 0 {
+                globals.set_value(flags, &Value::ULongLong(value & !WARES))?;
+            }
+        }
+    }
     let entity = globals
         .attr(new_creator, "Entity")
         .ok_or_else(|| anyhow!("the item's creator has no Entity"))?;
@@ -1550,6 +1561,30 @@ mod tests {
         let member = row_u64(&entities, STACK_MEMBER, copy, 0).unwrap();
         assert_eq!(member, row_u64(&entities, STACK_MEMBER, copy, 0).unwrap());
         assert_eq!(entities.entity_at(member), entities.entity_index(copy));
+    }
+
+    /// The `Flags` of an item's node.
+    fn flags(globals: &Lsf, item: Uuid) -> u64 {
+        let (_, node) = item_nodes(globals, item).unwrap();
+        match globals.get(node, "Flags") {
+            Some(Value::ULongLong(flags)) => flags,
+            other => panic!("no flags: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_copy_is_not_marked_as_wares() {
+        let mut globals = sample_globals();
+        let mut entities = sample_entities();
+        assert_ne!(
+            flags(&globals, uuid(ROPE)) & WARES,
+            0,
+            "the sample's rope is wares"
+        );
+        let to = Destination::of(&entities, uuid(HERO), true).unwrap();
+        let copy = copy_into(&mut globals, &mut entities, uuid(ROPE), &to, None).unwrap();
+        let (globals, _) = reread(&mut globals, &entities);
+        assert_eq!(flags(&globals, copy), flags(&globals, uuid(ROPE)) & !WARES);
     }
 
     #[test]

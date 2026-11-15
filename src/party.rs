@@ -923,7 +923,13 @@ pub mod build {
         };
         let item_node = |template: &str, stats: &str| {
             let template = Uuid::parse(template).expect("a sample template is a UUID");
+            // As the game writes them; the rope is marked as wares.
+            let flags = match stats {
+                "OBJ_Rope" => 0x8002_0000_000c,
+                _ => 0x8000_0000_000c,
+            };
             Node::new("Item")
+                .attr("Flags", DataType::ULongLong, Value::ULongLong(flags))
                 .attr("Level", DataType::FixedString, Value::Text(String::new()))
                 .attr("CurrentTemplate", DataType::Uuid, Value::Uuid(template))
                 .attr("CurrentTemplateType", DataType::Byte, Value::Byte(0))

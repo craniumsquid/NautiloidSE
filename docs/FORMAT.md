@@ -288,6 +288,8 @@ What adding an item would have to touch, from an unstacked scroll in a character
   name as an offset and a length, as the template's `SkillID` names it); the `MetaId` holds
   the name it was first given and an offset to its source. Every scroll's `SpellData` holds
   the same sixteen-byte identifier at offset 8.
+- **Wares.** An item marked as wares, to sell, has bit 33 set in its node's `Flags`
+  (`0x2_0000_0000`); the game sets it on loot such as cups, plates, gems and enemies' weapons.
 - **Every kind of item has nearly the same tables.** A weapon and a suit of armour have the
   same forty or so rows; scrolls add `SpellBookComponent`, food `SupplyComponent`, and some
   objects a health row. The game fills an item in from its template on load.
@@ -400,6 +402,7 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | The same, but copied without its spell book and its "data populated" mark | Loads and works: the game fills the spell in from the template |
 | Clothes from the camp chest copied to the main character; a quarterstaff of theirs copied into the camp chest; an NPC's Scroll of Fireball copied to the main character | Each loads and works |
 | Three saves made from an autosave, written with `SaveGameType` 0 | The load menu lists them by their names; autosaves, an export left as one included, are listed as "Autosave 4 - Wilderness" whatever the file is called |
+| Made by the app's own export: a stack of three Scrolls of Lightning Bolt made from a Scroll of Speak with Dead, a stack of Potions of Speed, Phalar Aluve and the Haste Helm for a character; a stack of healing potions and a Spear +1 copied from an NPC's for the camp chest. By the command-line tool: a Scroll of Haste made from an oil | Each loads and works; the scrolls cast. Items made from ones marked as wares were marked as wares too |
 
 Every failure looks the same: the save loads to 100%, drops to the title screen, and shows
 "Server shutting down". Other saves load normally afterwards.

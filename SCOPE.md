@@ -84,6 +84,8 @@ character or the camp chest, up to 20 of each per export.
 - An item that stacks (by the template's `maxStackAmount`) goes in as one stack of as many as
   asked for, up to what a stack holds. A single item's count can't be changed, so the
   Inventory tab puts a + beside it to add more.
+- A new item is not marked as wares (a bit in its node's `Flags`), whatever it was copied
+  from.
 - Items the game marks as story items are offered with a warning that a quest may count on
   there being only one.
 - An exported quicksave or autosave is written as a manual save. The game lists its own
@@ -149,7 +151,9 @@ Adamantine Splint Armour, a stack of Potions of Speed), items made from another 
 Scroll of Lightning Bolt made from Burning Hands with its spell left for the game to fill
 in, an NPC's Scroll of Fireball, and copies from the camp chest to a character and back. A
 scroll given a spell record of its own did not work. Round 11 tries the app's own export
-for these, a scroll made from an oil, and exports from an autosave written as manual saves.
+for these, a scroll made from an oil, and exports from an autosave written as manual saves;
+all worked. Items copied from ones marked as wares came out marked too, so new items now have
+that mark cleared.
 
 Phase 0 is built and passes on all eleven sample saves:
 
