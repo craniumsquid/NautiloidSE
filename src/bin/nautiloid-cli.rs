@@ -64,11 +64,13 @@ A <save> is a .lsv file or the save folder that holds one.
       Write one file's uncompressed contents to <out>.
   experiment <save> <folder> <name> <kind> [ITEM]
       Research: write a test save that adds to the entity data instead of overwriting it.
-      Kinds: copy-item ITEM (a second copy of an unstacked item, in the same inventory),
-      entity-list (the entity list moved to the end of the data, unchanged), move-table
-      (the experience table moved to the end, the first party member's experience +100),
-      loose-slot ITEM (the item's inventory records copied to the end and pointed at,
-      unchanged), tree-only ITEM (a copy of the item's nodes in the tree, nothing else).
+      Kinds: copy-item ITEM (a second copy of an unstacked item, in the same inventory);
+      checks that change nothing a player would see: entity-list (the entity list moved),
+      move-table [WHO] (the experience table moved, a party member's experience +100),
+      loose-member ITEM, loose-slot-record ITEM, loose-reference ITEM (one of the item's
+      inventory records, or its identifier, copied outside its table and pointed at),
+      grown-tables (the inventory record tables grown, every pointer into them moved),
+      old-list-row (the entity list moved, an unreferenced row of where it was rewritten).
   newage <save> <file.lsf> <out>
       Write a document's entity data (its NewAge blob) to <out>.
   rewrite <save> <out.lsv> [--reencode]
@@ -890,7 +892,6 @@ fn experiment(args: &Args, out: &mut impl Write) -> Result<()> {
             .ok_or_else(|| anyhow!("this kind needs an item's entity"))?;
         value::Uuid::parse(text).ok_or_else(|| anyhow!("{text} is not an entity's identifier"))
     };
-    let u64_of = |b: &[u8], at: usize| u64::from_le_bytes(b[at..at + 8].try_into().unwrap());
     match args.positional[3].as_str() {
         "copy-item" => {
             let copy = items::copy_item(&mut globals, &mut entities, item()?)?;
@@ -917,59 +918,11 @@ fn experiment(args: &Args, out: &mut impl Write) -> Result<()> {
                 xp + 100
             )?;
         }
-        "loose-slot" => {
-            let index = entities
-                .entity_index(item()?)
-                .ok_or_else(|| anyhow!("no such entity"))?;
-            let member = entities.table("game.inventory.v0.MemberComponent").unwrap();
-            let row = entities
-                .row_of(member, index)
-                .ok_or_else(|| anyhow!("not in an inventory"))?;
-            let member_at = (entities.row_offset(member, row) - 48) as u64;
-            let data_at = u64_of(entities.row(member, row), 0);
-            let data = entities.data(data_at, 16)?.to_vec();
-            let inventory = entities.entity_at(u64_of(&data, 0)).unwrap();
-            // MemberData, copied and pointed at.
-            let copy = entities.append(&data);
-            entities.set_data(member_at, &copy.to_le_bytes())?;
-            // The inventory's arrays, copied; the item's slot record too, with its entity
-            // reference a copy of the identifier.
-            let container = entities
-                .table("game.inventory.v1.ContainerComponent")
-                .unwrap();
-            let crow = entities.row_of(container, inventory).unwrap();
-            let container_at = (entities.row_offset(container, crow) - 48) as u64;
-            let mut fields = entities.row(container, crow).to_vec();
-            let (k, ke, v, ve) = (
-                u64_of(&fields, 0),
-                u64_of(&fields, 8),
-                u64_of(&fields, 16),
-                u64_of(&fields, 24),
-            );
-            let keys = entities.data(k, (ke - k) as usize)?.to_vec();
-            let mut values = entities.data(v, (ve - v) as usize)?.to_vec();
-            let id_copy = entities.append(&entities.entity_id(index).0);
-            for i in 0..values.len() / 8 {
-                let slot_at = u64_of(&values, i * 8);
-                let mut slot = entities.data(slot_at, 16)?.to_vec();
-                if entities.entity_at(u64_of(&slot, 0)) == Some(index) {
-                    slot[0..8].copy_from_slice(&id_copy.to_le_bytes());
-                    let moved = entities.append(&slot);
-                    values[i * 8..i * 8 + 8].copy_from_slice(&moved.to_le_bytes());
-                }
-            }
-            let keys_at = entities.append(&keys);
-            let values_at = entities.append(&values);
-            fields[0..8].copy_from_slice(&keys_at.to_le_bytes());
-            fields[8..16].copy_from_slice(&(keys_at + keys.len() as u64).to_le_bytes());
-            fields[16..24].copy_from_slice(&values_at.to_le_bytes());
-            fields[24..32].copy_from_slice(&(values_at + values.len() as u64).to_le_bytes());
-            entities.set_data(container_at, &fields)?;
-        }
-        "tree-only" => {
-            let copy = items::copy_nodes_only(&mut globals, item()?)?;
-            writeln!(out, "copy {copy} (in the tree only)")?;
-        }
+        "loose-member" => items::checks::loose_member_data(&mut entities, item()?)?,
+        "loose-slot-record" => items::checks::loose_slot_data(&mut entities, item()?)?,
+        "loose-reference" => items::checks::loose_reference(&mut entities, item()?)?,
+        "grown-tables" => items::checks::grown_tables(&mut entities)?,
+        "old-list-row" => items::checks::old_list_row(&mut entities)?,
         other => bail!("no experiment called {other}"),
     }
 

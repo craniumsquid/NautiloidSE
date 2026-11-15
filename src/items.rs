@@ -26,6 +26,9 @@ use crate::value::{Uuid, Value};
 use anyhow::{anyhow, ensure, Context, Result};
 
 const MEMBER: &str = "game.inventory.v0.MemberComponent";
+const MEMBER_DATA: &str = "game.inventory.v0.MemberData";
+const SLOT_DATA: &str = "game.inventory.v0.ContainerSlotData";
+const ENTITY_TABLE: &str = "core.v0.EntityId";
 const CONTAINER: &str = "game.inventory.v1.ContainerComponent";
 /// Unique to each item: sixteen bytes that look like an identifier.
 const SIGHT: &str = "game.sight.v0.DataComponent";
@@ -87,15 +90,189 @@ fn item_nodes(globals: &Lsf, item: Uuid) -> Result<(NodeId, NodeId)> {
     Ok((creator, node))
 }
 
+/// Where an item sits in its inventory.
+struct Place {
+    /// The item's `MemberComponent` row.
+    member_row: usize,
+    /// Its `MemberData` record.
+    member_data: Vec<u8>,
+    /// The inventory's `ContainerComponent` row.
+    container_row: usize,
+    /// Its slot record, and where the inventory's list points at it.
+    slot_data: Vec<u8>,
+    slot_index: usize,
+}
+
+fn table(entities: &NewAge, name: &str) -> Result<usize> {
+    entities
+        .table(name)
+        .ok_or_else(|| anyhow!("the save has no {name} table"))
+}
+
+/// The two arrays of an inventory's container: slot numbers and offsets of slot records.
+fn container_arrays(entities: &NewAge, row: usize) -> Result<(Vec<u8>, Vec<u8>)> {
+    let container = table(entities, CONTAINER)?;
+    let fields = entities.row(container, row);
+    let (keys, keys_end) = (u64_of(fields, 0), u64_of(fields, 8));
+    let (values, values_end) = (u64_of(fields, 16), u64_of(fields, 24));
+    ensure!(
+        keys <= keys_end && values <= values_end,
+        "an inventory's lists are back to front"
+    );
+    ensure!(
+        (values_end - values) / 8 == (keys_end - keys) / 2,
+        "an inventory's lists differ in length"
+    );
+    Ok((
+        entities.data(keys, (keys_end - keys) as usize)?.to_vec(),
+        entities
+            .data(values, (values_end - values) as usize)?
+            .to_vec(),
+    ))
+}
+
+fn place(entities: &NewAge, index: u32) -> Result<Place> {
+    let member = table(entities, MEMBER)?;
+    let member_row = entities
+        .row_of(member, index)
+        .ok_or_else(|| anyhow!("the item is not in an inventory"))?;
+    let member_data = entities
+        .data(u64_of(entities.row(member, member_row), 0), 16)?
+        .to_vec();
+    let inventory = entities
+        .entity_at(u64_of(&member_data, 0))
+        .ok_or_else(|| anyhow!("the item's inventory is not an entity"))?;
+    let container_row = entities
+        .row_of(table(entities, CONTAINER)?, inventory)
+        .ok_or_else(|| anyhow!("the item's inventory has no container"))?;
+    let (_, values) = container_arrays(entities, container_row)?;
+    for (slot_index, pointer) in values.chunks_exact(8).enumerate() {
+        let slot_data = entities.data(u64_of(pointer, 0), 16)?.to_vec();
+        if entities.entity_at(u64_of(&slot_data, 0)) == Some(index) {
+            return Ok(Place {
+                member_row,
+                member_data,
+                container_row,
+                slot_data,
+                slot_index,
+            });
+        }
+    }
+    Err(anyhow!("the item's inventory does not list it"))
+}
+
+/// Points an inventory's container at new arrays, appended to the end of the data.
+fn set_container_arrays(
+    entities: &mut NewAge,
+    row: usize,
+    keys: &[u8],
+    values: &[u8],
+) -> Result<()> {
+    let container = table(entities, CONTAINER)?;
+    let keys_at = entities.append(keys);
+    let values_at = entities.append(values);
+    let row_at = (entities.row_offset(container, row) - 48) as u64;
+    let mut pairs = Vec::with_capacity(32);
+    for value in [
+        keys_at,
+        keys_at + keys.len() as u64,
+        values_at,
+        values_at + values.len() as u64,
+    ] {
+        pairs.extend_from_slice(&value.to_le_bytes());
+    }
+    entities.set_data(row_at, &pairs)
+}
+
+/// Adds a record to a table of records that rows point at, keeping every record inside the
+/// table: the table is copied to the end with the new record, and every pointer into the
+/// old copy is moved by the same distance. `pointers` lists where those pointers are.
+/// Returns the new record's offset.
+fn add_record(entities: &mut NewAge, name: &str, record: &[u8], pointers: &[u64]) -> Result<u64> {
+    let id = table(entities, name)?;
+    let (old_start, len) = {
+        let t = &entities.tables()[id];
+        (
+            (entities.row_offset(id, 0) - 48) as u64,
+            (t.rows * t.row_len) as u64,
+        )
+    };
+    let row = entities.add_row(id, None, record)?;
+    let new_start = (entities.row_offset(id, 0) - 48) as u64;
+    for &at in pointers {
+        let old = u64_of(entities.data(at, 8)?, 0);
+        ensure!(
+            (old_start..old_start + len).contains(&old),
+            "{name}: a pointer at {at} is not into the table"
+        );
+        entities.set_data(at, &(old - old_start + new_start).to_le_bytes())?;
+    }
+    Ok((entities.row_offset(id, row) - 48) as u64)
+}
+
+/// Where every pointer to a `MemberData` record is: the start of every `MemberComponent` row.
+fn member_data_pointers(entities: &NewAge) -> Result<Vec<u64>> {
+    let member = table(entities, MEMBER)?;
+    Ok((0..entities.tables()[member].rows)
+        .map(|row| (entities.row_offset(member, row) - 48) as u64)
+        .collect())
+}
+
+/// Where every pointer to a `ContainerSlotData` record is: each entry of every inventory's
+/// list of slot records.
+fn slot_data_pointers(entities: &NewAge) -> Result<Vec<u64>> {
+    let container = table(entities, CONTAINER)?;
+    let mut out = Vec::new();
+    for row in 0..entities.tables()[container].rows {
+        let fields = entities.row(container, row);
+        let (values, values_end) = (u64_of(fields, 16), u64_of(fields, 24));
+        out.extend((values..values_end).step_by(8));
+    }
+    Ok(out)
+}
+
+/// Adds a `MemberData` record to its table and returns its offset.
+pub fn add_member_data(entities: &mut NewAge, record: &[u8]) -> Result<u64> {
+    let pointers = member_data_pointers(entities)?;
+    add_record(entities, MEMBER_DATA, record, &pointers)
+}
+
+/// Adds a `ContainerSlotData` record to its table and returns its offset.
+pub fn add_slot_data(entities: &mut NewAge, record: &[u8]) -> Result<u64> {
+    let pointers = slot_data_pointers(entities)?;
+    add_record(entities, SLOT_DATA, record, &pointers)
+}
+
+/// A row of the entity table that nothing points at, filled with `id`, for rows to point at
+/// to mean that entity. The game writes the entity list at the head of the entity table, and
+/// most of it is pointed at by nothing; once the list has been moved
+/// ([`NewAge::add_entities`]), those rows are free.
+pub fn add_reference(entities: &mut NewAge, id: Uuid) -> Result<u64> {
+    let ids = table(entities, ENTITY_TABLE)?;
+    let rows = entities.tables()[ids].rows;
+    let start = (entities.row_offset(ids, 0) - 48) as u64;
+    let list = entities.entity_list_offset();
+    // Rows of the entity table that are not the entity list as it now stands.
+    let candidates: Vec<u64> = (0..rows as u64)
+        .map(|r| start + r * 16)
+        .filter(|&at| !(list.0..list.1).contains(&at))
+        .take(4096)
+        .collect();
+    let free = entities.unreferenced(&candidates);
+    let at = *free
+        .first()
+        .ok_or_else(|| anyhow!("no free row in the entity table"))?;
+    entities.set_data(at, &id.0)?;
+    Ok(at)
+}
+
 /// Copies an unstacked item that is in an inventory, into the same inventory. Returns the
 /// copy's entity.
 pub fn copy_item(globals: &mut Lsf, entities: &mut NewAge, item: Uuid) -> Result<Uuid> {
     let index = entities
         .entity_index(item)
         .ok_or_else(|| anyhow!("no entity {item} in the save"))?;
-    let item_table = entities
-        .table(crate::party::tables::ITEM)
-        .ok_or_else(|| anyhow!("the save has no items"))?;
+    let item_table = table(entities, crate::party::tables::ITEM)?;
     ensure!(
         entities.row_of(item_table, index).is_some(),
         "{item} is not an item"
@@ -106,58 +283,7 @@ pub fn copy_item(globals: &mut Lsf, entities: &mut NewAge, item: Uuid) -> Result
             "copying a stacked item is not supported yet"
         );
     }
-
-    // Where the item is: its MemberData, and the inventory's container.
-    let member = entities
-        .table(MEMBER)
-        .ok_or_else(|| anyhow!("the save has no {MEMBER} table"))?;
-    let member_row = entities
-        .row_of(member, index)
-        .ok_or_else(|| anyhow!("{item} is not in an inventory"))?;
-    let member_data_at = u64_of(entities.row(member, member_row), 0);
-    let member_data = entities.data(member_data_at, 16)?.to_vec();
-    let inventory_ref = u64_of(&member_data, 0);
-    let inventory = entities
-        .entity_at(inventory_ref)
-        .ok_or_else(|| anyhow!("the item's inventory is not an entity"))?;
-    let container = entities
-        .table(CONTAINER)
-        .ok_or_else(|| anyhow!("the save has no {CONTAINER} table"))?;
-    let container_row = entities
-        .row_of(container, inventory)
-        .ok_or_else(|| anyhow!("the item's inventory has no container"))?;
-    let fields = entities.row(container, container_row).to_vec();
-    let (keys, keys_end) = (u64_of(&fields, 0), u64_of(&fields, 8));
-    let (values, values_end) = (u64_of(&fields, 16), u64_of(&fields, 24));
-    ensure!(
-        keys <= keys_end && values <= values_end,
-        "the inventory's lists are back to front"
-    );
-    let count = ((keys_end - keys) / 2) as usize;
-    ensure!(
-        (values_end - values) / 8 == count as u64,
-        "the inventory's lists differ in length"
-    );
-    let key_bytes = entities.data(keys, count * 2)?.to_vec();
-    let value_bytes = entities.data(values, count * 8)?.to_vec();
-    let slots: Vec<u16> = key_bytes
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-        .collect();
-    let mut positions = Vec::with_capacity(count);
-    let mut own_slot_data = None;
-    for i in 0..count {
-        let at = u64_of(&value_bytes, i * 8);
-        let slot_data = entities.data(at, 16)?.to_vec();
-        positions.push(u32_of(&slot_data, 8));
-        if entities.entity_at(u64_of(&slot_data, 0)) == Some(index) {
-            own_slot_data = Some(slot_data);
-        }
-    }
-    let own_slot_data =
-        own_slot_data.ok_or_else(|| anyhow!("the inventory does not list {item}"))?;
-    let slot = slots.iter().max().map_or(0, |&s| s + 1);
-    let position = positions.iter().max().map_or(0, |&p| p + 1);
+    let place = place(entities, index)?;
 
     // Every row the item owns, read before anything is added.
     let owned: Vec<(usize, Vec<u8>)> = (0..entities.tables().len())
@@ -169,31 +295,35 @@ pub fn copy_item(globals: &mut Lsf, entities: &mut NewAge, item: Uuid) -> Result
 
     let copy = new_uuid();
     let copy_index = entities.add_entities(&[copy])?[0];
-    // What other rows point at to mean the copy.
-    let copy_ref = entities.append(&copy.0);
+    let copy_ref = add_reference(entities, copy)?;
 
-    let mut new_member_data = member_data.clone();
-    new_member_data[8..12].copy_from_slice(&(slot as u32).to_le_bytes());
-    let new_member_data_at = entities.append(&new_member_data);
+    // A slot in the same inventory, after the last.
+    let (keys, values) = container_arrays(entities, place.container_row)?;
+    let slot = keys
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .max()
+        .map_or(0, |s| s + 1);
+    let mut position = 0;
+    for pointer in values.chunks_exact(8) {
+        let record = entities.data(u64_of(pointer, 0), 16)?;
+        position = position.max(u32_of(record, 8) + 1);
+    }
 
-    let mut new_slot_data = own_slot_data;
-    new_slot_data[0..8].copy_from_slice(&copy_ref.to_le_bytes());
-    new_slot_data[8..12].copy_from_slice(&position.to_le_bytes());
-    let new_slot_data_at = entities.append(&new_slot_data);
+    let mut member_data = place.member_data.clone();
+    member_data[8..12].copy_from_slice(&(slot as u32).to_le_bytes());
+    let member_data_at = add_member_data(entities, &member_data)?;
 
-    let mut new_keys = key_bytes;
-    new_keys.extend_from_slice(&slot.to_le_bytes());
-    let new_keys_at = entities.append(&new_keys);
-    let mut new_values = value_bytes;
-    new_values.extend_from_slice(&new_slot_data_at.to_le_bytes());
-    let new_values_at = entities.append(&new_values);
-    let container_at = (entities.row_offset(container, container_row) - 48) as u64;
-    let mut new_fields = fields;
-    new_fields[0..8].copy_from_slice(&new_keys_at.to_le_bytes());
-    new_fields[8..16].copy_from_slice(&(new_keys_at + new_keys.len() as u64).to_le_bytes());
-    new_fields[16..24].copy_from_slice(&new_values_at.to_le_bytes());
-    new_fields[24..32].copy_from_slice(&(new_values_at + new_values.len() as u64).to_le_bytes());
-    entities.set_data(container_at, &new_fields)?;
+    let mut slot_data = place.slot_data.clone();
+    slot_data[0..8].copy_from_slice(&copy_ref.to_le_bytes());
+    slot_data[8..12].copy_from_slice(&position.to_le_bytes());
+    let slot_data_at = add_slot_data(entities, &slot_data)?;
+
+    // The inventory's lists, read again now that the pointers in them have moved.
+    let (mut keys, mut values) = container_arrays(entities, place.container_row)?;
+    keys.extend_from_slice(&slot.to_le_bytes());
+    values.extend_from_slice(&slot_data_at.to_le_bytes());
+    set_container_arrays(entities, place.container_row, &keys, &values)?;
 
     // Wherever the original is listed as owned, the copy is too.
     for name in OWNER_LISTS {
@@ -223,7 +353,7 @@ pub fn copy_item(globals: &mut Lsf, entities: &mut NewAge, item: Uuid) -> Result
 
     for (table, mut row) in owned {
         match entities.tables()[table].name.as_str() {
-            MEMBER => row[0..8].copy_from_slice(&new_member_data_at.to_le_bytes()),
+            MEMBER => row[0..8].copy_from_slice(&member_data_at.to_le_bytes()),
             SIGHT => row.copy_from_slice(&new_uuid().0),
             _ => {}
         }
@@ -234,6 +364,73 @@ pub fn copy_item(globals: &mut Lsf, entities: &mut NewAge, item: Uuid) -> Result
 
     copy_nodes(globals, item, copy)?;
     Ok(copy)
+}
+
+/// Research: test changes that each check one part of the method on its own. None adds
+/// anything a player would notice.
+pub mod checks {
+    use super::*;
+
+    /// The item's `MemberData` copied to the end of the data, outside its table.
+    pub fn loose_member_data(entities: &mut NewAge, item: Uuid) -> Result<()> {
+        let index = entities
+            .entity_index(item)
+            .ok_or_else(|| anyhow!("no such entity"))?;
+        let place = place(entities, index)?;
+        let at = entities.append(&place.member_data);
+        let member = table(entities, MEMBER)?;
+        let row_at = (entities.row_offset(member, place.member_row) - 48) as u64;
+        entities.set_data(row_at, &at.to_le_bytes())
+    }
+
+    /// The item's slot record copied to the end of the data, outside its table, and the
+    /// inventory's list pointed at the copy.
+    pub fn loose_slot_data(entities: &mut NewAge, item: Uuid) -> Result<()> {
+        let index = entities
+            .entity_index(item)
+            .ok_or_else(|| anyhow!("no such entity"))?;
+        let place = place(entities, index)?;
+        let at = entities.append(&place.slot_data);
+        let (keys, mut values) = container_arrays(entities, place.container_row)?;
+        let i = place.slot_index * 8;
+        values[i..i + 8].copy_from_slice(&at.to_le_bytes());
+        set_container_arrays(entities, place.container_row, &keys, &values)
+    }
+
+    /// The item's slot record pointed at a copy of its identifier at the end of the data,
+    /// outside the entity table.
+    pub fn loose_reference(entities: &mut NewAge, item: Uuid) -> Result<()> {
+        let index = entities
+            .entity_index(item)
+            .ok_or_else(|| anyhow!("no such entity"))?;
+        let place = place(entities, index)?;
+        let id_at = entities.append(&entities.entity_id(index).0);
+        let (_, values) = container_arrays(entities, place.container_row)?;
+        let record_at = u64_of(&values, place.slot_index * 8);
+        entities.set_data(record_at, &id_at.to_le_bytes())
+    }
+
+    /// `MemberData` and `ContainerSlotData` each grown by a copy of their last record, which
+    /// nothing points at, with every pointer into them moved.
+    pub fn grown_tables(entities: &mut NewAge) -> Result<()> {
+        for name in [MEMBER_DATA, SLOT_DATA] {
+            let id = table(entities, name)?;
+            let last = entities.tables()[id].rows - 1;
+            let record = entities.row(id, last).to_vec();
+            match name {
+                MEMBER_DATA => add_member_data(entities, &record)?,
+                _ => add_slot_data(entities, &record)?,
+            };
+        }
+        Ok(())
+    }
+
+    /// The entity list moved, then one row of where it was, which nothing points at,
+    /// overwritten with a new identifier.
+    pub fn old_list_row(entities: &mut NewAge) -> Result<()> {
+        entities.add_entities(&[])?;
+        add_reference(entities, new_uuid()).map(|_| ())
+    }
 }
 
 /// Copies an item's `Creator` and `Item` nodes, for the entity `copy`, with a new `UUID`.
@@ -255,12 +452,4 @@ fn copy_nodes(globals: &mut Lsf, item: Uuid, copy: Uuid) -> Result<()> {
         globals.set_value(uuid, &Value::Uuid(new_uuid()))?;
     }
     Ok(())
-}
-
-/// Research: copies an item's nodes in the tree for a new entity, and adds nothing to the
-/// entity data. Returns the new entity.
-pub fn copy_nodes_only(globals: &mut Lsf, item: Uuid) -> Result<Uuid> {
-    let copy = new_uuid();
-    copy_nodes(globals, item, copy)?;
-    Ok(copy)
 }

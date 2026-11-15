@@ -446,6 +446,35 @@ impl NewAge {
         Ok((id, &self.tables[id]))
     }
 
+    /// Where the entity list is, as data-section offsets: start and end.
+    pub fn entity_list_offset(&self) -> (u64, u64) {
+        let start = (self.entity_list - HEADER_LEN) as u64;
+        (start, start + self.entity_count as u64 * 16)
+    }
+
+    /// The whole data section, for finding offsets in it.
+    pub fn data_section(&self) -> &[u8] {
+        &self.bytes[HEADER_LEN..HEADER_LEN + self.data_len()]
+    }
+
+    /// Of `offsets`, those that no eight bytes anywhere in the data section hold: nothing can
+    /// be pointing at them.
+    pub fn unreferenced(&self, offsets: &[u64]) -> Vec<u64> {
+        let mut left: std::collections::HashSet<u64> = offsets.iter().copied().collect();
+        let data = self.data_section();
+        for window in data.windows(8) {
+            if left.is_empty() {
+                break;
+            }
+            left.remove(&u64::from_le_bytes(window.try_into().unwrap_or([0; 8])));
+        }
+        offsets
+            .iter()
+            .copied()
+            .filter(|o| left.contains(o))
+            .collect()
+    }
+
     pub fn entity_count(&self) -> usize {
         self.entity_count
     }

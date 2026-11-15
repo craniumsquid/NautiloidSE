@@ -259,12 +259,22 @@ What adding an item would have to touch, from an unstacked scroll in a character
   pack, with a character creator and no `game.item.v0.ItemComponent`.
 
 The editor adds by appending: a new entity list with the new identifier at the end, each
-table that gains a row copied whole to the end with its owner list, and every new array or
-record at the end, pointed at. Nothing already in the data moves, so every existing offset
-still reads the same bytes. Whether the game accepts this is being tested with five saves:
-a copy of the scroll; the entity list moved with nothing added; a table moved and one value
-in it changed; the scroll's inventory records moved into the loose data; and the scroll's
-nodes copied in the tree with nothing in the entity data.
+table that gains a row copied whole to the end with its owner list, and new arrays at the
+end, pointed at. Nothing already in the data moves, so every existing offset still reads
+the same bytes.
+
+The first round of tests (see Tried in the game) showed that the entity list and a whole
+table can be moved, but that records rows point at must stay inside their tables: a copy
+whose `MemberData`, slot record and identifier were in the loose data hung the load, and so
+did moving just the scroll's records there. So the second version keeps them in:
+
+- `MemberData` and `ContainerSlotData` have no spare rows (each row is pointed at exactly
+  once: every `MemberData` from the start of a `MemberComponent` row, every slot record from
+  an inventory's list). Each table is copied to the end with the new record, and every one
+  of those pointers is moved by the same distance.
+- The entity table has no spare rows either, but once the entity list has been moved, most
+  of the rows where it was are pointed at by nothing (about 2,200 of 2,300 in one sample).
+  The copy's identifier goes in one of those.
 
 ## Tried in the game
 
@@ -287,6 +297,11 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | Points allocated to Strength at character creation: 0 → 7 for one character, 7 → 9 for another | Loads. Strength shows 15 (was 8) and 20 (was 18) |
 | One character's experience set to 7100 and entitled level 5 → 6; the party's Inspiration 6 → 3; that character's gold stack 3,385 → 5,000 | Loads. A level-up is offered, Inspiration shows 3, and gold shows 5,000 on that character and in the party total |
 | Made in the app on Windows, on a Dark Urge character in another campaign: points allocated to Strength 0 → 2, Intelligence 0 → 2 and Wisdom 2 → 8; gold stack 429 → 1,429 | Loads with the changes in place. The file is byte for byte what this code writes on Linux for the same changes |
+| The entity list copied to the end of the data, unchanged, and `core.v0.Level` pointed at the copy | Loads |
+| The experience table and its owner list copied to the end, the directory and owner map pointed at the copies, and one character's experience +100 in the copy | Loads, with the new experience |
+| A second copy of a scroll in the same pack, its `MemberData`, slot record and identifier in the loose data at the end | Hangs at 75% |
+| The scroll's own `MemberData`, slot record and identifier copied to the loose data and pointed at, nothing else | Hangs at 75% |
+| The scroll's `Creator` and `Item` nodes copied, with nothing in the entity data | Crashes to the desktop |
 | Made in the app: two companions' approval 0 → 50; a companion at camp's Strength points 0 → 18; a stack of healing potions 1 → 21; a stack of fish in the camp chest, worth 4 camp supplies each, 2 → 14 | Loads. The character sheet shows approval as "High (50)". Camp supplies show 335, up from 287 by the 48 the twelve fish are worth. After the companion is swapped into the party and the game saves again, that save has approval at 50, the stacks at 21 and 14, the companion's Strength at 26 with the 18 points kept, and experience awarded to them to match the party |
 
 Every failure looks the same: the save loads to 100%, drops to the title screen, and shows
