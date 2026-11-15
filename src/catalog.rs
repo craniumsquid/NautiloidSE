@@ -91,6 +91,11 @@ pub struct CatalogItem {
     pub category: String,
     /// Whether the game marks it a story item: one its quests may count on.
     pub story: bool,
+    /// The spell it casts when used, by the game's name for it, for a scroll:
+    /// `Projectile_Fireball`. Empty for anything else.
+    pub spell: String,
+    /// How many can be in one stack: 1 for an item that doesn't stack.
+    pub max_stack: u32,
 }
 
 /// The game's item templates.
@@ -115,6 +120,10 @@ struct Template {
     icon: String,
     /// `StoryItem`, when the template says.
     story: Option<bool>,
+    /// The spell its first use action casts.
+    spell: String,
+    /// `maxStackAmount`, when the template says.
+    max_stack: Option<u32>,
     parent: String,
 }
 
@@ -130,6 +139,22 @@ fn text_of(lsf: &Lsf, node: NodeId, name: &str) -> String {
     lsf.get(node, name)
         .and_then(|v| v.as_str().map(str::to_owned))
         .unwrap_or_default()
+}
+
+/// The spell a template's first use action casts: `SkillID` in
+/// `OnUsePeaceActions/Action/Attributes`.
+fn use_spell(lsf: &Lsf, template: NodeId) -> String {
+    for actions in lsf.children_named(template, "OnUsePeaceActions") {
+        for action in lsf.children_named(actions, "Action") {
+            for attributes in lsf.children_named(action, "Attributes") {
+                let spell = text_of(lsf, attributes, "SkillID");
+                if !spell.is_empty() {
+                    return spell;
+                }
+            }
+        }
+    }
+    String::new()
 }
 
 /// Reads every template in a root template list.
@@ -156,6 +181,11 @@ fn read_templates(bytes: &[u8], into: &mut HashMap<String, Template>) -> Result<
                     .get(node, "StoryItem")
                     .and_then(|v| v.as_i64())
                     .map(|v| v != 0),
+                spell: use_spell(&lsf, node),
+                max_stack: lsf
+                    .get(node, "maxStackAmount")
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v.clamp(1, u32::MAX as i64) as u32),
                 parent: text_of(&lsf, node, "ParentTemplateId").to_lowercase(),
             },
         );
@@ -294,17 +324,24 @@ impl Catalog {
             }
             String::new()
         };
-        let story = |key: &str| -> bool {
+        // A value the template leaves out comes from its parents.
+        fn first<T: Copy>(
+            templates: &HashMap<String, Template>,
+            key: &str,
+            field: fn(&Template) -> Option<T>,
+        ) -> Option<T> {
             let mut current = templates.get(key);
             for _ in 0..32 {
-                let Some(template) = current else { break };
-                if let Some(story) = template.story {
-                    return story;
+                let template = current?;
+                if let Some(value) = field(template) {
+                    return Some(value);
                 }
                 current = templates.get(&template.parent);
             }
-            false
-        };
+            None
+        }
+        let story = |key: &str| first(&templates, key, |t| t.story).unwrap_or(false);
+        let max_stack = |key: &str| first(&templates, key, |t| t.max_stack).unwrap_or(1);
         let mut items = Vec::new();
         for (key, template) in &templates {
             if template.kind != "item" {
@@ -333,6 +370,8 @@ impl Catalog {
                 rarity: value("Rarity"),
                 category,
                 story: story(key),
+                spell: inherited(key, |t| &t.spell),
+                max_stack: max_stack(key),
             });
         }
 
@@ -549,6 +588,9 @@ pub mod build {
                     },
                 ),
                 "StoryItem" => node.attr(field, DataType::Bool, Value::Bool(value == "true")),
+                "maxStackAmount" => {
+                    node.attr(field, DataType::Int, Value::Int(value.parse().unwrap_or(1)))
+                }
                 _ => node.attr(field, DataType::FixedString, Value::Text(value.into())),
             };
         }
@@ -695,6 +737,7 @@ mod tests {
                     ("Type", "item"),
                     ("Icon", "Item_Potion_New"),
                     ("StoryItem", "true"),
+                    ("maxStackAmount", "100"),
                 ],
             ))
             .child(template(
@@ -755,6 +798,7 @@ mod tests {
         );
         assert_eq!(potion.category, "Potion");
         assert!(potion.story, "a story item, as its parent is");
+        assert_eq!(potion.max_stack, 100, "as its parent says");
 
         let dagger = catalog
             .by_template("AAAA0000-0000-0000-0000-000000000004")
@@ -764,6 +808,7 @@ mod tests {
             (Kind::Weapon, "Uncommon")
         );
         assert!(!dagger.story);
+        assert_eq!(dagger.max_stack, 1, "nothing says it stacks");
         // The replaced parent has no name of its own any more.
         assert_eq!(
             catalog

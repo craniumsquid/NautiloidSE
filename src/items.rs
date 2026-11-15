@@ -69,6 +69,17 @@ const STACK: &str = "game.inventory.v0.Stack";
 /// One item's amount in a stack: a u16 index into the stack's items, two unused bytes and
 /// the amount, a u32.
 const STACK_ENTRY: &str = "game.inventory.v0.StackEntry";
+/// On an item that casts a spell, such as a scroll: a pair of offsets to its [`SPELL_DATA`]
+/// records, one for a scroll.
+const SPELL_BOOK: &str = "game.spell.v3.SpellBookComponent";
+/// A spell someone or something can cast, 72 bytes: first an offset to its [`SPELL_ID`].
+const SPELL_DATA: &str = "game.spell.v3.SpellData";
+/// A spell's name, 24 bytes: an offset to its [`META_ID`], then the name as an offset and a
+/// length.
+const SPELL_ID: &str = "game.spell.v0.SpellId";
+/// Where a spell comes from, 24 bytes: the name it was first given as an offset and a
+/// length, then an offset to the source.
+const META_ID: &str = "game.spell.v0.MetaId";
 /// What an offset holds when it points at nothing.
 const NONE: u64 = u64::MAX;
 
@@ -245,17 +256,264 @@ fn add_record(entities: &mut NewAge, name: &str, record: &[u8], pointers: &[u64]
     Ok((entities.row_offset(id, row) - 48) as u64)
 }
 
-/// Where every pointer to a `MemberData` record is: the start of every `MemberComponent` row.
-fn member_data_pointers(entities: &NewAge) -> Result<Vec<u64>> {
-    let member = table(entities, MEMBER)?;
-    Ok((0..entities.tables()[member].rows)
-        .map(|row| (entities.row_offset(member, row) - 48) as u64)
-        .collect())
+/// Fields that hold offsets into a table of records: each table they are in, and where in
+/// its rows. Lists of offsets the game keeps outside tables are found separately.
+type Sources = &'static [(&'static str, &'static [usize])];
+
+const MEMBER_DATA_SOURCES: Sources = &[(MEMBER, &[0])];
+const STACK_SOURCES: Sources = &[(STACKED, &[0])];
+const STACK_ENTRY_SOURCES: Sources = &[(STACK, &[16, 24])];
+const SPELL_DATA_SOURCES: Sources = &[(SPELL_BOOK, &[0, 8])];
+const SPELL_ID_SOURCES: Sources = &[
+    ("game.concentration.v0.ConcentrationComponent", &[0]),
+    ("game.hotbar.v2.Slot", &[16]),
+    ("game.spell.v1.CooldownData", &[0]),
+    (SPELL_DATA, &[0]),
+    ("game.spell_cast.v0.SpellData", &[32]),
+];
+const META_ID_SOURCES: Sources = &[
+    ("game.spell.v0.CCPrepareSpellComponent", &[0, 8]),
+    ("game.spell.v0.PlayerPrepareSpellComponent", &[0, 8]),
+    ("game.spell.v0.SpellBookPrepares", &[0, 8]),
+    (SPELL_ID, &[0]),
+    ("game.spell.v1.SpellMeta", &[0]),
+];
+
+/// Every source of pointers into the tables the editor adds to, for telling a pointer into
+/// a neighbouring table (the end of a list there is the start of the next table) from one
+/// the editor doesn't know about.
+const ALL_SOURCES: [Sources; 6] = [
+    MEMBER_DATA_SOURCES,
+    STACK_SOURCES,
+    STACK_ENTRY_SOURCES,
+    SPELL_DATA_SOURCES,
+    SPELL_ID_SOURCES,
+    META_ID_SOURCES,
+];
+
+/// The offsets of the fields `sources` names, in every row of their tables.
+fn source_fields(entities: &NewAge, sources: Sources) -> Vec<u64> {
+    let mut out = Vec::new();
+    for (source, fields) in sources {
+        let Some(t) = entities.table(source) else {
+            continue;
+        };
+        for row in 0..entities.tables()[t].rows {
+            let at = (entities.row_offset(t, row) - 48) as u64;
+            out.extend(fields.iter().map(|f| at + *f as u64));
+        }
+    }
+    out
 }
 
-/// Where every pointer to a `ContainerSlotData` record is: each entry of every inventory's
-/// list of slot records.
-fn slot_data_pointers(entities: &NewAge) -> Result<Vec<u64>> {
+/// Where every pointer into the table of records `name` is: the fields `sources` names in
+/// every row of their tables, and the offsets `extra`. Refuses if anything else reads as an
+/// offset of one of its records, since moving the table would leave that pointing at the
+/// old copy. What is looked at: each whole eight bytes of a row, in tables whose rows can
+/// hold an offset, and each eight bytes outside tables except the inventories' lists of
+/// slot numbers.
+pub fn pointers_into(
+    entities: &NewAge,
+    name: &str,
+    sources: Sources,
+    extra: Vec<u64>,
+) -> Result<Vec<u64>> {
+    let target = table(entities, name)?;
+    let (row_len, rows) = {
+        let t = &entities.tables()[target];
+        (t.row_len as u64, t.rows as u64)
+    };
+    let start = (entities.row_offset(target, 0) - 48) as u64;
+    let end = start + rows * row_len;
+    let mut known = extra;
+    known.extend(source_fields(entities, sources));
+    known.sort_unstable();
+    known.dedup();
+    // Pointers known to be into other tables or lists, which may end where this one starts:
+    // the other tables' sources, the inventories' lists, the entity list's bounds and each
+    // stack's list of items.
+    let mut elsewhere: Vec<u64> = ALL_SOURCES
+        .iter()
+        .flat_map(|s| source_fields(entities, s))
+        .collect();
+    elsewhere.extend(slot_lists(entities).unwrap_or_default());
+    elsewhere.extend(source_fields(
+        entities,
+        &[("core.v0.Level", &[0, 8]), (STACK, &[0, 8])],
+    ));
+    elsewhere.sort_unstable();
+    elsewhere.dedup();
+    // The owner map, whose slots bound lists of entity indices: the level row's second pair.
+    let owner_map = entities
+        .table("core.v0.Level")
+        .filter(|&t| entities.tables()[t].rows > 0 && entities.tables()[t].row_len >= 32)
+        .map(|t| {
+            let row = entities.row(t, 0);
+            (u64_of(row, 16), u64_of(row, 24))
+        })
+        .unwrap_or((0, 0));
+    // Eight bytes that read as an offset of one of the table's records, where no known
+    // pointer is.
+    let hit = |at: u64| -> Result<bool> {
+        if (owner_map.0..owner_map.1).contains(&at) {
+            return Ok(false);
+        }
+        let value = u64_of(entities.data(at, 8)?, 0);
+        Ok(value >= start
+            && value < end
+            && (value - start).is_multiple_of(row_len)
+            && known.binary_search(&at).is_err()
+            && elsewhere.binary_search(&at).is_err())
+    };
+    // Whether eight bytes could be a pointer into the table: one of its records, its end,
+    // or nothing. A field that is a pointer is one in every row; a number that happens to
+    // read as an offset is not.
+    let could_be = |at: u64| -> Result<bool> {
+        let value = u64_of(entities.data(at, 8)?, 0);
+        Ok(value == NONE
+            || (value >= start && value <= end && (value - start).is_multiple_of(row_len)))
+    };
+    let refuse = |at: u64| -> anyhow::Error {
+        let place = match entities.locate(at) {
+            Some((t, _, within)) => format!("{} +{within}", entities.tables()[t].name),
+            None => format!("a list at offset {at}"),
+        };
+        anyhow!("{name}: {place} points into it, which this editor doesn't expect")
+    };
+    // Inside tables: each whole eight bytes of each row.
+    let mut tables: Vec<(u64, u64)> = Vec::new();
+    for (id, t) in entities.tables().iter().enumerate() {
+        if t.rows == 0 {
+            continue;
+        }
+        let first = (entities.row_offset(id, 0) - 48) as u64;
+        tables.push((first, first + (t.rows * t.row_len) as u64));
+        // The sample saves the tests build keep lists in tables of their own, named
+        // test.*, where the game keeps them outside tables; they are looked at as lists.
+        if t.row_len < 8 || t.name.starts_with("test.") {
+            continue;
+        }
+        let row_len = t.row_len as u64;
+        for field in (0..=row_len - 8).step_by(8) {
+            let mut found = None;
+            for row in 0..t.rows as u64 {
+                let at = first + row * row_len + field;
+                if hit(at)? {
+                    found = Some(at);
+                    break;
+                }
+            }
+            let Some(at) = found else { continue };
+            let mut every = true;
+            for row in 0..t.rows as u64 {
+                every &= could_be(first + row * row_len + field)?;
+            }
+            if every {
+                return Err(refuse(at));
+            }
+        }
+    }
+    // Outside tables: the lists rows point at, as pairs of offsets. Copies of tables an
+    // edit has moved are left behind there with what they held, but nothing points at them.
+    tables.sort_unstable();
+    let in_table = |at: u64| {
+        let i = tables.partition_point(|t| t.0 <= at);
+        i > 0 && at < tables[i - 1].1
+    };
+    let in_test_table = |at: u64| {
+        entities
+            .locate(at)
+            .is_some_and(|(t, _, _)| entities.tables()[t].name.starts_with("test."))
+    };
+    let data_len = entities.data_section().len() as u64;
+    let pairs_in = |spans: &[(u64, u64)], lists: &mut Vec<(u64, u64)>| -> Result<()> {
+        for &(from, to) in spans {
+            let mut at = from;
+            while at + 16 <= to {
+                let fields = entities.data(at, 16)?;
+                let (begin, end) = (u64_of(fields, 0), u64_of(fields, 8));
+                let list = begin > 0
+                    && begin < end
+                    && end <= data_len
+                    && end - begin <= MAX_LIST
+                    && begin.is_multiple_of(8)
+                    && (!in_table(begin) || in_test_table(begin));
+                if list {
+                    lists.push((begin, end));
+                }
+                at += 8;
+            }
+        }
+        Ok(())
+    };
+    let mut found = Vec::new();
+    pairs_in(&tables, &mut found)?;
+    // Lists of lists, a level down.
+    let mut deeper = Vec::new();
+    pairs_in(&merged(found.clone()), &mut deeper)?;
+    found.extend(deeper);
+    found.sort_unstable();
+    found.dedup();
+    let lists = merged(found.clone());
+    // Except lists of slot numbers, which are two bytes each.
+    let mut keys: Vec<(u64, u64)> = Vec::new();
+    if let Some(container) = entities.table(CONTAINER) {
+        for row in 0..entities.tables()[container].rows {
+            let fields = entities.row(container, row);
+            let (begin, end) = (u64_of(fields, 0), u64_of(fields, 8));
+            if begin != NONE && begin < end {
+                keys.push((begin - begin % 8, end.div_ceil(8) * 8));
+            }
+        }
+    }
+    let keys = merged(keys);
+    let in_keys = |at: u64| {
+        let i = keys.partition_point(|k| k.0 <= at);
+        i > 0 && at < keys[i - 1].1
+    };
+    for (begin, end) in lists {
+        let mut at = begin;
+        while at + 8 <= end {
+            if !in_keys(at) && hit(at)? {
+                // A pointer if a list it is in holds nothing else.
+                for &(from, to) in found.iter().filter(|(f, t)| *f <= at && at < *t) {
+                    let mut every = true;
+                    let mut entry = from;
+                    while entry + 8 <= to {
+                        every &= could_be(entry)?;
+                        entry += 8;
+                    }
+                    if every {
+                        return Err(refuse(at));
+                    }
+                }
+            }
+            at += 8;
+        }
+    }
+    Ok(known)
+}
+
+/// The longest list of offsets [`pointers_into`] takes a pair of offsets to be the bounds
+/// of. The game's longest are an owner's lists of what it owns: a few thousand entries.
+const MAX_LIST: u64 = 1 << 18;
+
+/// Spans sorted, with those that overlap or touch made one.
+fn merged(mut spans: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
+    spans.sort_unstable();
+    let mut out: Vec<(u64, u64)> = Vec::with_capacity(spans.len());
+    for (begin, end) in spans {
+        match out.last_mut() {
+            Some(last) if begin <= last.1 => last.1 = last.1.max(end),
+            _ => out.push((begin, end)),
+        }
+    }
+    out
+}
+
+/// Where every pointer to a `ContainerSlotData` record is outside its fields: each entry of
+/// every inventory's list of slot records.
+fn slot_lists(entities: &NewAge) -> Result<Vec<u64>> {
     let container = table(entities, CONTAINER)?;
     let mut out = Vec::new();
     for row in 0..entities.tables()[container].rows {
@@ -266,23 +524,43 @@ fn slot_data_pointers(entities: &NewAge) -> Result<Vec<u64>> {
     Ok(out)
 }
 
-/// Where every pointer into the stack entries is: each stack's pair of offsets to its own.
-fn stack_entry_pointers(entities: &NewAge) -> Result<Vec<u64>> {
-    let stacks = table(entities, STACK)?;
-    Ok((0..entities.tables()[stacks].rows)
-        .flat_map(|row| {
-            let at = (entities.row_offset(stacks, row) - 48) as u64;
-            [at + 16, at + 24]
-        })
-        .collect())
+/// For each table of records the editor adds to, how many pointers into it it knows of, or
+/// why it can't add to it in this save.
+pub fn pointer_check(entities: &NewAge) -> Vec<(&'static str, Result<usize>)> {
+    vec![
+        (MEMBER_DATA, member_data_pointers(entities).map(|p| p.len())),
+        (SLOT_DATA, slot_data_pointers(entities).map(|p| p.len())),
+        (STACK_ENTRY, stack_entry_pointers(entities).map(|p| p.len())),
+        (STACK, stack_pointers(entities).map(|p| p.len())),
+        (
+            SPELL_DATA,
+            pointers_into(entities, SPELL_DATA, SPELL_DATA_SOURCES, Vec::new()).map(|p| p.len()),
+        ),
+        (
+            SPELL_ID,
+            pointers_into(entities, SPELL_ID, SPELL_ID_SOURCES, Vec::new()).map(|p| p.len()),
+        ),
+        (
+            META_ID,
+            pointers_into(entities, META_ID, META_ID_SOURCES, Vec::new()).map(|p| p.len()),
+        ),
+    ]
 }
 
-/// Where every pointer to a stack's record is: the start of every `NewStackComponent` row.
+fn member_data_pointers(entities: &NewAge) -> Result<Vec<u64>> {
+    pointers_into(entities, MEMBER_DATA, MEMBER_DATA_SOURCES, Vec::new())
+}
+
+fn slot_data_pointers(entities: &NewAge) -> Result<Vec<u64>> {
+    pointers_into(entities, SLOT_DATA, &[], slot_lists(entities)?)
+}
+
+fn stack_entry_pointers(entities: &NewAge) -> Result<Vec<u64>> {
+    pointers_into(entities, STACK_ENTRY, STACK_ENTRY_SOURCES, Vec::new())
+}
+
 fn stack_pointers(entities: &NewAge) -> Result<Vec<u64>> {
-    let stacked = table(entities, STACKED)?;
-    Ok((0..entities.tables()[stacked].rows)
-        .map(|row| (entities.row_offset(stacked, row) - 48) as u64)
-        .collect())
+    pointers_into(entities, STACK, STACK_SOURCES, Vec::new())
 }
 
 /// Adds a `MemberData` record to its table and returns its offset.
@@ -453,6 +731,18 @@ pub fn copy_into(
     to: &Destination,
     amount: Option<u32>,
 ) -> Result<Uuid> {
+    copy_into_without(globals, entities, donor, to, amount, &[])
+}
+
+/// Research: [`copy_into`], leaving out the donor's rows in the tables named in `without`.
+pub fn copy_into_without(
+    globals: &mut Lsf,
+    entities: &mut NewAge,
+    donor: Uuid,
+    to: &Destination,
+    amount: Option<u32>,
+    without: &[&str],
+) -> Result<Uuid> {
     let index = entities
         .entity_index(donor)
         .ok_or_else(|| anyhow!("no entity {donor} in the save"))?;
@@ -566,7 +856,11 @@ pub fn copy_into(
     }
 
     for (table, mut row) in owned {
-        match entities.tables()[table].name.as_str() {
+        let name = entities.tables()[table].name.as_str();
+        if without.contains(&name) {
+            continue;
+        }
+        match name {
             // Added below, or not the copy's.
             MEMBER | WIELDING | STORY | STACKED | STACK_MEMBER => continue,
             WIELDED if !same_owner => continue,
@@ -591,6 +885,58 @@ pub fn copy_into(
 
     copy_nodes(globals, donor, copy)?;
     Ok(copy)
+}
+
+/// The spell `item` casts, if it casts one: a scroll's.
+pub fn spell_of(entities: &NewAge, item: Uuid) -> Option<String> {
+    let index = entities.entity_index(item)?;
+    let book = entities.table(SPELL_BOOK)?;
+    let row = entities.row_of(book, index)?;
+    let begin = u64_of(entities.row(book, row), 0);
+    let spell_id = u64_of(entities.data(begin, 8).ok()?, 0);
+    let fields = entities.data(spell_id, 24).ok()?;
+    let name = entities
+        .data(u64_of(fields, 8), u32_of(fields, 16) as usize)
+        .ok()?;
+    String::from_utf8(name.to_vec()).ok()
+}
+
+/// Makes `item`, a copy of a scroll, cast `spell` instead, by the name the game gives the
+/// spell (`Projectile_Fireball`): the copy gets a spell record of its own naming the spell.
+/// Where the spell came from stays the donor's, as the game names that differently.
+pub fn set_spell(entities: &mut NewAge, item: Uuid, spell: &str) -> Result<()> {
+    let index = entities
+        .entity_index(item)
+        .ok_or_else(|| anyhow!("no entity {item} in the save"))?;
+    let book = table(entities, SPELL_BOOK)?;
+    let row = entities
+        .row_of(book, index)
+        .ok_or_else(|| anyhow!("{item} casts no spell"))?;
+    let (begin, end) = {
+        let fields = entities.row(book, row);
+        (u64_of(fields, 0), u64_of(fields, 8))
+    };
+    let data_len = entities.tables()[table(entities, SPELL_DATA)?].row_len as u64;
+    ensure!(end - begin == data_len, "{item} casts more than one spell");
+    let data = entities.data(begin, data_len as usize)?.to_vec();
+    let spell_id = entities.data(u64_of(&data, 0), 24)?.to_vec();
+
+    let name_at = entities.append(spell.as_bytes());
+    let mut new_id = spell_id;
+    new_id[8..16].copy_from_slice(&name_at.to_le_bytes());
+    new_id[16..20].copy_from_slice(&(spell.len() as u32).to_le_bytes());
+    let pointers = pointers_into(entities, SPELL_ID, SPELL_ID_SOURCES, Vec::new())?;
+    let id_at = add_record(entities, SPELL_ID, &new_id, &pointers)?;
+
+    let mut new_data = data;
+    new_data[0..8].copy_from_slice(&id_at.to_le_bytes());
+    let pointers = pointers_into(entities, SPELL_DATA, SPELL_DATA_SOURCES, Vec::new())?;
+    let data_at = add_record(entities, SPELL_DATA, &new_data, &pointers)?;
+
+    let row_at = (entities.row_offset(book, row) - 48) as u64;
+    let mut pair = data_at.to_le_bytes().to_vec();
+    pair.extend_from_slice(&(data_at + data_len).to_le_bytes());
+    entities.set_data(row_at, &pair)
 }
 
 /// Makes the item `item` a stack of `amount` on its own: a stack record listing it, with

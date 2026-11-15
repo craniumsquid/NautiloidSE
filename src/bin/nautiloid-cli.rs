@@ -195,6 +195,29 @@ fn run(raw: &[String]) -> Result<()> {
         "items" => items(&Args::parse(rest, &[], &["game"])?, out),
         "owners" => owners(&Args::parse(rest, &[], &[])?, out),
         "pointers" => pointers(&Args::parse(rest, &[], &[])?, out),
+        "pointer-check" => {
+            for path in &rest.to_vec() {
+                let save = Save::open(Path::new(path))?;
+                if save.support() != Support::Editable {
+                    continue;
+                }
+                let globals = save.lsf(save::GLOBALS)?;
+                let entities = NewAge::from_lsf(&globals)?;
+                writeln!(
+                    out,
+                    "{path}: entity list {:?}, data {}",
+                    entities.entity_list_offset(),
+                    entities.data_section().len()
+                )?;
+                for (name, result) in items::pointer_check(&entities) {
+                    match result {
+                        Ok(n) => writeln!(out, "    {name}: {n} known")?,
+                        Err(e) => writeln!(out, "    {name}: {e:#}")?,
+                    }
+                }
+            }
+            Ok(())
+        }
         "donors" => donors(&Args::parse(rest, &["tables"], &["game", "kind"])?, out),
         "tables" => tables(&Args::parse(rest, &[], &[])?, out),
         "rows" => rows(&Args::parse(rest, &[], &["limit"])?, out),
@@ -204,7 +227,10 @@ fn run(raw: &[String]) -> Result<()> {
         "check" => check(&Args::parse(rest, &[], &[])?, out),
         "extract" => extract(&Args::parse(rest, &[], &[])?),
         "newage" => newage_blob(&Args::parse(rest, &[], &[])?),
-        "experiment" => experiment(&Args::parse(rest, &[], &["game"])?, out),
+        "experiment" => experiment(
+            &Args::parse(rest, &["spell", "no-spellbook"], &["game", "as", "amount"])?,
+            out,
+        ),
         "survey" => survey(&Args::parse(rest, &[], &[])?, out),
         "catalog-files" => catalog_files(&Args::parse(rest, &[], &[])?, out),
         "catalog" => catalog(&Args::parse(rest, &[], &["find", "limit"])?, out),
@@ -938,7 +964,7 @@ fn pointers(args: &Args, out: &mut impl Write) -> Result<()> {
     let mut at = 0usize;
     while at + 8 <= data.len() {
         let v = u64::from_le_bytes(data[at..at + 8].try_into().unwrap());
-        if v >= start && v <= end && (v - start) % t.row_len as u64 == 0 {
+        if v >= start && v <= end && (v - start).is_multiple_of(t.row_len as u64) {
             let place = match entities.locate(at as u64) {
                 Some((table, row, within)) => {
                     let _ = row;
@@ -1140,7 +1166,7 @@ fn donors(args: &Args, out: &mut impl Write) -> Result<()> {
         // A bag's owner is the bag: go up to whoever holds it.
         for _ in 0..4 {
             let Some(o) = owner else { break };
-            if names.contains_key(&o) || has(party::tables::ITEM, o) == false {
+            if names.contains_key(&o) || !has(party::tables::ITEM, o) {
                 break;
             }
             let up = member
@@ -1309,6 +1335,73 @@ fn experiment(args: &Args, out: &mut impl Write) -> Result<()> {
             )?;
             writeln!(out, "copy {copy}: {} ({})", target.display, target.template)?;
         }
+        "add" => {
+            // A copy of DONOR, from anywhere, into HOLDER's main inventory: a character by
+            // name, or "chest".
+            let holder = args
+                .positional
+                .get(5)
+                .ok_or_else(|| anyhow!("add needs DONOR and HOLDER"))?;
+            let party = party::read(&globals, &entities)?;
+            let (holder_id, is_character) = match holder.as_str() {
+                "chest" => {
+                    let chest = entities
+                        .table(party::tables::CAMP_CHEST)
+                        .and_then(|t| entities.owned_rows(t).next())
+                        .map(|(_, owner)| entities.entity_id(owner))
+                        .ok_or_else(|| anyhow!("the save has no camp chest"))?;
+                    (chest, false)
+                }
+                name => (
+                    party
+                        .characters
+                        .iter()
+                        .find(|c| c.display_name() == name)
+                        .map(|c| c.entity)
+                        .ok_or_else(|| anyhow!("nobody called {name}"))?,
+                    true,
+                ),
+            };
+            let to = items::Destination::of(&entities, holder_id, is_character)?;
+            let amount = args.number("amount")?.map(|n| n as u32);
+            let without: &[&str] = match args.get("no-spellbook") {
+                Some(_) => &[
+                    "game.spell.v3.SpellBookComponent",
+                    "game.v0.InventoryItemDataPopulatedComponent",
+                ],
+                None => &[],
+            };
+            let copy = items::copy_into_without(
+                &mut globals,
+                &mut entities,
+                item()?,
+                &to,
+                amount,
+                without,
+            )?;
+            writeln!(out, "copy {copy} into {holder}'s {}", to.inventory)?;
+            if let Some(stats) = args.get("as") {
+                let folder = Path::new(
+                    args.get("game")
+                        .ok_or_else(|| anyhow!("--as needs --game FOLDER"))?,
+                );
+                let catalog = match folder.join("Shared.pak").is_file() {
+                    true => nautiloid_save_editor::catalog::Catalog::from_game(folder)?,
+                    false => nautiloid_save_editor::catalog::Catalog::from_folder(folder)?,
+                };
+                let target = catalog
+                    .by_stats(stats)
+                    .ok_or_else(|| anyhow!("the game has no item called {stats}"))?;
+                items::make_into(&mut globals, &mut entities, copy, &target.template, stats)?;
+                writeln!(out, "  made into {} ({})", target.display, target.template)?;
+                if args.get("spell").is_some() {
+                    ensure!(!target.spell.is_empty(), "{stats} casts no spell");
+                    let before = items::spell_of(&entities, copy);
+                    items::set_spell(&mut entities, copy, &target.spell)?;
+                    writeln!(out, "  casts {} (was {before:?})", target.spell)?;
+                }
+            }
+        }
         "loose-member" => items::checks::loose_member_data(&mut entities, item()?)?,
         "loose-slot-record" => items::checks::loose_slot_data(&mut entities, item()?)?,
         "loose-reference" => items::checks::loose_reference(&mut entities, item()?)?,
@@ -1448,15 +1541,19 @@ fn catalog(args: &Args, out: &mut impl Write) -> Result<()> {
     for item in matching.take(limit) {
         writeln!(
             out,
-            "{:<36} {:<34} {:<7} {:<10} {:<18} {:<5} {}",
+            "{:<36} {:<34} {:<7} {:<10} {:<18} {:<5} x{:<6} {}",
             item.display,
             item.stats,
             item.kind.label(),
             item.rarity,
             item.category,
             if item.story { "story" } else { "" },
+            item.max_stack,
             item.template
         )?;
+        if !item.spell.is_empty() {
+            writeln!(out, "    casts {}", item.spell)?;
+        }
     }
     Ok(())
 }
