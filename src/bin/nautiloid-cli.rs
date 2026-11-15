@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use nautiloid_save_editor::diff;
 use nautiloid_save_editor::items;
 use nautiloid_save_editor::lsf::{Lsf, NodeId, Sections};
-use nautiloid_save_editor::lspk::Method;
+use nautiloid_save_editor::lspk::{self, Method};
 use nautiloid_save_editor::newage::NewAge;
 use nautiloid_save_editor::party::{self, Party};
 use nautiloid_save_editor::save::{self, Save, Support};
@@ -65,12 +65,18 @@ A <save> is a .lsv file or the save folder that holds one.
   experiment <save> <folder> <name> <kind> [ITEM]
       Research: write a test save that adds to the entity data instead of overwriting it.
       Kinds: copy-item ITEM (a second copy of an unstacked item, in the same inventory);
+      copy-as ITEM LIKE (a copy given LIKE's template and game name in the tree only);
+      copy-as-template ITEM LIKE (the same, and LIKE's template and visual rows);
       checks that change nothing a player would see: entity-list (the entity list moved),
       move-table [WHO] (the experience table moved, a party member's experience +100),
       loose-member ITEM, loose-slot-record ITEM, loose-reference ITEM (one of the item's
       inventory records, or its identifier, copied outside its table and pointed at),
       grown-tables (the inventory record tables grown, every pointer into them moved),
       old-list-row (the entity list moved, an unreferenced row of where it was rewritten).
+  survey <game Data folder>
+      What the game's packages hold that an item catalog needs: for every .pak under the
+      folder, its version, parts and file count, and the root templates, item stats and
+      language files in it. Reads only each package's header and file list.
   newage <save> <file.lsf> <out>
       Write a document's entity data (its NewAge blob) to <out>.
   rewrite <save> <out.lsv> [--reencode]
@@ -189,6 +195,7 @@ fn run(raw: &[String]) -> Result<()> {
         "extract" => extract(&Args::parse(rest, &[], &[])?),
         "newage" => newage_blob(&Args::parse(rest, &[], &[])?),
         "experiment" => experiment(&Args::parse(rest, &[], &[])?, out),
+        "survey" => survey(&Args::parse(rest, &[], &[])?, out),
         "rewrite" => rewrite(&Args::parse(rest, &["reencode"], &[])?, out),
         "help" | "--help" | "-h" => {
             write!(out, "{USAGE}")?;
@@ -918,6 +925,22 @@ fn experiment(args: &Args, out: &mut impl Write) -> Result<()> {
                 xp + 100
             )?;
         }
+        "copy-as" | "copy-as-template" => {
+            let like = args
+                .positional
+                .get(5)
+                .and_then(|t| value::Uuid::parse(t))
+                .ok_or_else(|| anyhow!("copy-as needs ITEM and LIKE"))?;
+            let rows: &[&str] = match args.positional[3].as_str() {
+                "copy-as" => &[],
+                _ => &[
+                    "game.templates.v0.TemplateComponent",
+                    "game.visual.v5.GameObjectVisualComponent",
+                ],
+            };
+            let copy = items::copy_item_as(&mut globals, &mut entities, item()?, like, rows)?;
+            writeln!(out, "copy {copy}")?;
+        }
         "loose-member" => items::checks::loose_member_data(&mut entities, item()?)?,
         "loose-slot-record" => items::checks::loose_slot_data(&mut entities, item()?)?,
         "loose-reference" => items::checks::loose_reference(&mut entities, item()?)?,
@@ -941,6 +964,71 @@ fn experiment(args: &Args, out: &mut impl Write) -> Result<()> {
     let entities = NewAge::from_lsf(&globals)?;
     party::read(&globals, &entities)?;
     writeln!(out, "wrote {}", folder.display())?;
+    Ok(())
+}
+
+fn survey(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(1, "survey <game Data folder>")?;
+    let root = Path::new(&args.positional[0]);
+    let mut paks = Vec::new();
+    let mut folders = vec![root.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(&folder).with_context(|| folder.display().to_string())? {
+            let path = entry?.path();
+            if path.is_dir() {
+                folders.push(path);
+            } else if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("pak"))
+            {
+                paks.push(path);
+            }
+        }
+    }
+    paks.sort();
+    let wanted = |name: &str| {
+        name.contains("RootTemplates")
+            || name.contains("Stats/Generated/Data/")
+            || name.ends_with(".loca")
+            || name.contains("TreasureTable")
+    };
+    writeln!(out, "{} packages under {}", paks.len(), root.display())?;
+    for path in &paks {
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let shown = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        match lspk::list(path) {
+            Ok(listing) => {
+                let parts: std::collections::BTreeSet<u8> =
+                    listing.files.iter().map(|f| f.part).collect();
+                writeln!(
+                    out,
+                    "== {shown}  {} MB, version {}, {} parts, flags {:#x}, {} files, parts used {:?}",
+                    size / 1_000_000,
+                    listing.version,
+                    listing.parts,
+                    listing.flags,
+                    listing.files.len(),
+                    parts
+                )?;
+                for file in listing.files.iter().filter(|f| wanted(&f.name)).take(400) {
+                    writeln!(
+                        out,
+                        "   {:>10} {:>10} part {} {}  {}",
+                        file.len,
+                        file.stored_len,
+                        file.part,
+                        file.method.map_or("?", |m| m.label()),
+                        file.name
+                    )?;
+                }
+            }
+            Err(error) => writeln!(out, "== {shown}  {} MB: {error:#}", size / 1_000_000)?,
+        }
+    }
     Ok(())
 }
 

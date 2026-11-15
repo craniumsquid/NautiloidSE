@@ -272,6 +272,8 @@ did moving just the scroll's records there. So the second version keeps them in:
   once: every `MemberData` from the start of a `MemberComponent` row, every slot record from
   an inventory's list). Each table is copied to the end with the new record, and every one
   of those pointers is moved by the same distance.
+- An identifier can be anywhere: the game reads the sixteen bytes an offset points at. Records
+  of a type, such as `MemberData` and slot records, must be inside their table.
 - The entity table has no spare rows either, but once the entity list has been moved, most
   of the rows where it was are pointed at by nothing (about 2,200 of 2,300 in one sample).
   The copy's identifier goes in one of those.
@@ -309,6 +311,12 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | A second copy of a scroll in the same pack, its `MemberData`, slot record and identifier in the loose data at the end | Hangs at 75% |
 | The scroll's own `MemberData`, slot record and identifier copied to the loose data and pointed at, nothing else | Hangs at 75% |
 | The scroll's `Creator` and `Item` nodes copied, with nothing in the entity data | Crashes to the desktop |
+| A second copy of the scroll, with its `MemberData` and slot record added inside their tables (each table copied to the end, every pointer into it moved) and its identifier in a freed row of the entity table | Loads. Nythra has two Revivify scrolls, in separate slots |
+| `MemberData` and `ContainerSlotData` each grown by one record nothing points at, every pointer into them moved | Loads |
+| The entity list moved, and one row of where it was, which nothing points at, given a new identifier | Loads |
+| Only the scroll's `MemberData` copied to the loose data and pointed at | Hangs at 75% |
+| Only the scroll's slot record copied to the loose data and pointed at | Hangs at 75% |
+| Only the scroll's identifier copied to the loose data, and its slot record pointed at that | Loads |
 | Made in the app: two companions' approval 0 → 50; a companion at camp's Strength points 0 → 18; a stack of healing potions 1 → 21; a stack of fish in the camp chest, worth 4 camp supplies each, 2 → 14 | Loads. The character sheet shows approval as "High (50)". Camp supplies show 335, up from 287 by the 48 the twelve fish are worth. After the companion is swapped into the party and the game saves again, that save has approval at 50, the stacks at 21 and 14, the companion's Strength at 26 with the 18 points kept, and experience awarded to them to match the party |
 
 Every failure looks the same: the save loads to 100%, drops to the title screen, and shows

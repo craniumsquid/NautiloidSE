@@ -415,16 +415,28 @@ fn an_item_copied_into_an_inventory_reads_back_once_more() {
         let mut globals = save.lsf(save::GLOBALS).unwrap();
         let mut entities = NewAge::from_lsf(&globals).unwrap();
         let before = party::read(&globals, &entities).unwrap();
-        // The first unstacked item a character carries outside any bag.
+        // The first item that can be copied; and anything that can't is refused.
+        let copyable = |i: &party::Item| {
+            let index = entities.entity_index(i.entity).unwrap();
+            items::why_not_copied(&entities, index).is_none()
+        };
         let Some((holder, item)) = before.inventories.iter().find_map(|inventory| {
-            let item = inventory
-                .items
-                .iter()
-                .find(|i| !i.stacked && !i.in_container)?;
+            let item = inventory.items.iter().find(|i| copyable(i))?;
             Some((inventory.holder, item.clone()))
         }) else {
             continue;
         };
+        let refused = before
+            .inventories
+            .iter()
+            .flat_map(|i| &i.items)
+            .find(|i| !copyable(i))
+            .cloned();
+        if let Some(refused) = refused {
+            let mut globals = globals.clone();
+            let mut entities = entities.clone();
+            assert!(items::copy_item(&mut globals, &mut entities, refused.entity).is_err());
+        }
         let copy = items::copy_item(&mut globals, &mut entities, item.entity)
             .unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
         entities.store(&mut globals).unwrap();

@@ -48,18 +48,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.97.0
-      - run: cargo build --release --locked --bin nautiloid-save-editor
+      # The editor, and the command-line tool for looking inside saves and game files.
+      - run: cargo build --release --locked --bins
       - name: Gather the files
         shell: bash
         run: |
           mkdir -p upload files
           cp LICENSE assets/fonts/OFL-*.txt files/
           if [ "$RUNNER_OS" = Windows ]; then
-            cp target/release/nautiloid-save-editor.exe files/
+            cp target/release/nautiloid-save-editor.exe target/release/nautiloid-cli.exe files/
             mv files/* upload/
           else
-            # In an archive, so the file stays marked as a program.
-            cp target/release/nautiloid-save-editor files/
+            # In an archive, so the files stay marked as programs.
+            cp target/release/nautiloid-save-editor target/release/nautiloid-cli files/
             tar -czf "upload/nautiloid-save-editor-${{ matrix.name }}.tar.gz" \
               --transform 's,^files,nautiloid-save-editor,' files
           fi

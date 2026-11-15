@@ -32,8 +32,16 @@ const ENTITY_TABLE: &str = "core.v0.EntityId";
 const CONTAINER: &str = "game.inventory.v1.ContainerComponent";
 /// Unique to each item: sixteen bytes that look like an identifier.
 const SIGHT: &str = "game.sight.v0.DataComponent";
-/// A stacked item; copying one is not supported yet.
+/// A stacked item; copying one is not supported yet. The stack itself has a
+/// `NewStackComponent`, and every other item in it a `StackMemberComponent`.
 const STACKED: &str = "game.inventory.v0.NewStackComponent";
+const STACK_MEMBER: &str = "game.inventory.v0.StackMemberComponent";
+/// On an item someone is wearing or wielding: an offset to that character's identifier.
+const WIELDING: &str = "game.inventory.v0.WieldingComponent";
+/// On an item the story depends on.
+const STORY: &str = "game.item.v0.IsStoryItemComponent";
+/// On an inventory: an offset to its owner, which for a bag is the bag.
+const INVENTORY_OWNER: &str = "game.inventory.v1.IsOwnedComponent";
 /// On an owner: a pair of offsets to a list of offsets to the identifiers of what it owns.
 const OWNER_LISTS: [&str; 3] = [
     "game.v0.IsCurrentOwnerComponent",
@@ -266,6 +274,39 @@ pub fn add_reference(entities: &mut NewAge, id: Uuid) -> Result<u64> {
     Ok(at)
 }
 
+/// Why an item can't be copied, if it can't.
+pub fn why_not_copied(entities: &NewAge, index: u32) -> Option<&'static str> {
+    let has = |name: &str| {
+        entities
+            .table(name)
+            .is_some_and(|t| entities.row_of(t, index).is_some())
+    };
+    if !has(crate::party::tables::ITEM) {
+        return Some("it is not an item");
+    }
+    if has(STACKED) || has(STACK_MEMBER) {
+        return Some("it is a stack; change how many it holds instead");
+    }
+    if has(WIELDING) {
+        return Some("it is equipped; unequip it in the game first");
+    }
+    if has(STORY) {
+        return Some("the story depends on it");
+    }
+    if let Some(owned) = entities.table(INVENTORY_OWNER) {
+        let holds = entities
+            .owned_rows(owned)
+            .any(|(row, _)| entities.entity_at(u64_of(entities.row(owned, row), 0)) == Some(index));
+        if holds {
+            return Some("it holds other items");
+        }
+    }
+    if !has(MEMBER) {
+        return Some("it is not in an inventory");
+    }
+    None
+}
+
 /// Copies an unstacked item that is in an inventory, into the same inventory. Returns the
 /// copy's entity.
 pub fn copy_item(globals: &mut Lsf, entities: &mut NewAge, item: Uuid) -> Result<Uuid> {
@@ -277,11 +318,8 @@ pub fn copy_item(globals: &mut Lsf, entities: &mut NewAge, item: Uuid) -> Result
         entities.row_of(item_table, index).is_some(),
         "{item} is not an item"
     );
-    if let Some(stacked) = entities.table(STACKED) {
-        ensure!(
-            entities.row_of(stacked, index).is_none(),
-            "copying a stacked item is not supported yet"
-        );
+    if let Some(reason) = why_not_copied(entities, index) {
+        anyhow::bail!("{item} can't be copied: {reason}");
     }
     let place = place(entities, index)?;
 
@@ -363,6 +401,54 @@ pub fn copy_item(globals: &mut Lsf, entities: &mut NewAge, item: Uuid) -> Result
     }
 
     copy_nodes(globals, item, copy)?;
+    Ok(copy)
+}
+
+/// Research: copies `item`, then makes the copy into the kind of item `like` is, by giving
+/// its nodes `like`'s template and game name and giving it `like`'s rows in the tables named
+/// in `rows`. Everything else stays as the original's. Returns the copy.
+pub fn copy_item_as(
+    globals: &mut Lsf,
+    entities: &mut NewAge,
+    item: Uuid,
+    like: Uuid,
+    rows: &[&str],
+) -> Result<Uuid> {
+    let like_index = entities
+        .entity_index(like)
+        .ok_or_else(|| anyhow!("no entity {like} in the save"))?;
+    let copy = copy_item(globals, entities, item)?;
+    let copy_index = entities
+        .entity_index(copy)
+        .ok_or_else(|| anyhow!("the copy is missing"))?;
+    for &name in rows {
+        let id = table(entities, name)?;
+        let (Some(from), Some(to)) = (
+            entities.row_of(id, like_index),
+            entities.row_of(id, copy_index),
+        ) else {
+            continue;
+        };
+        let bytes = entities.row(id, from).to_vec();
+        let at = (entities.row_offset(id, to) - 48) as u64;
+        entities.set_data(at, &bytes)?;
+    }
+    let (like_creator, like_node) = item_nodes(globals, like)?;
+    let (creator, node) = item_nodes(globals, copy)?;
+    for (from, to, names) in [
+        (like_creator, creator, &["TemplateType", "TemplateID"][..]),
+        (
+            like_node,
+            node,
+            &["CurrentTemplate", "CurrentTemplateType", "Stats"][..],
+        ),
+    ] {
+        for name in names {
+            if let (Some(value), Some(attr)) = (globals.get(from, name), globals.attr(to, name)) {
+                globals.set_value(attr, &value)?;
+            }
+        }
+    }
     Ok(copy)
 }
 
