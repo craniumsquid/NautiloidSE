@@ -1,11 +1,12 @@
 //! The Inventory tab: what each character and the camp chest hold, and how many each stack
 //! holds.
 
+use super::game::{self, GameFiles};
 use super::party::field_stepper;
 use super::widgets::{self, Kind};
 use super::{theme, Action};
 use crate::party::{Holder, Item};
-use crate::session::{tidy, Field, Session};
+use crate::session::{Field, Session};
 use eframe::egui::{self, Id, Margin, Ui};
 
 /// The game's name for an item and what else is worth knowing about it.
@@ -20,16 +21,14 @@ fn detail(item: &Item) -> String {
     detail
 }
 
-pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
+pub fn show(ui: &mut Ui, session: &Session, game: &GameFiles, actions: &mut Vec<Action>) {
     ui.label(egui::RichText::new("Inventory").font(theme::display(30.0)));
     ui.label(
-        egui::RichText::new(
-            "How many each stack holds. Items go by the game's own names for now; the names \
-             it shows are not in the save.",
-        )
-        .color(theme::MUTED),
+        egui::RichText::new("What everyone carries, and how many each stack holds.")
+            .color(theme::MUTED),
     );
     ui.add_space(10.0);
+    game::notice(ui, game, actions);
 
     let party = session.party();
     if party.inventories.is_empty() {
@@ -86,7 +85,7 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
     let matches = |item: &Item| {
         wanted.is_empty()
             || item.stats.to_lowercase().contains(&wanted)
-            || tidy(&item.stats).to_lowercase().contains(&wanted)
+            || session.item_name(item).to_lowercase().contains(&wanted)
     };
     let items = || {
         inventory
@@ -106,7 +105,7 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
             ui.label(egui::RichText::new("No stacks here.").color(theme::MUTED));
         }
         for (index, item) in items().filter(|(_, item)| item.stacked) {
-            widgets::row(ui, &tidy(&item.stats), Some(&detail(item)), |ui| {
+            widgets::row(ui, &session.item_name(item), Some(&detail(item)), |ui| {
                 field_stepper(ui, session, Field::Amount(chosen, index), 1, 64.0, actions);
             });
         }
@@ -133,7 +132,9 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
                 for (position, (_, item)) in items().filter(|(_, item)| !item.stacked).enumerate() {
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.label(egui::RichText::new(tidy(&item.stats)).color(theme::TEXT_SOFT));
+                        ui.label(
+                            egui::RichText::new(session.item_name(item)).color(theme::TEXT_SOFT),
+                        );
                         ui.label(
                             egui::RichText::new(detail(item))
                                 .font(theme::body(12.0))

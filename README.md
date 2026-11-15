@@ -24,8 +24,9 @@ The party, and the companions waiting at camp:
 - **Inspiration**, once the party has earned a point.
 
 - **Inventory**: how many each stack holds, for every character and the camp chest. Food
-  shows the camp supplies it is worth, and the game's supplies total follows it. Items go
-  by the game's internal names for now.
+  shows the camp supplies it is worth, and the game's supplies total follows it. Items have
+  the names players see, read from your own install of the game; nothing from the game is
+  shipped with the editor. Items added by mods keep their internal names for now.
 - **Approval**: what each companion thinks of your character.
 
 Each of these has been changed in a save that then loaded in the game (build

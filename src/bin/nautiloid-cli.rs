@@ -23,7 +23,7 @@ A <save> is a .lsv file or the save folder that holds one.
       The files in the save package.
   info <save>
       Game version, party, difficulty and mods.
-  dump <save> <file.lsf> [--node ID | --path PATH] [--depth N]
+  dump <save> <file.lsf> | <file.lsf> [--node ID | --path PATH] [--depth N]
       A document as text. Nodes are [Name] #id; attributes are Name: Type = value.
   find <save> [--value TEXT] [--attr NAME] [--in NODE] [--file FILE] [--limit N]
       Attributes whose value is TEXT (numbers) or contains it (text and UUIDs), whose name
@@ -33,7 +33,7 @@ A <save> is a .lsv file or the save folder that holds one.
   party <save>
       The party as the entity data has it: level, experience, ability scores, gold and
       Inspiration.
-  items <save>
+  items <save> [--game FOLDER]
       What each character and the camp chest hold, with the amount of each stack and the
       camp supplies food is worth.
   edit <save> <folder> <name> [--xp WHO=N,...] [--level-up WHO,...]
@@ -67,6 +67,7 @@ A <save> is a .lsv file or the save folder that holds one.
       Kinds: copy-item ITEM (a second copy of an unstacked item, in the same inventory);
       copy-as ITEM LIKE (a copy given LIKE's template and game name in the tree only);
       copy-as-template ITEM LIKE (the same, and LIKE's template and visual rows);
+      copy-to ITEM STATS --game FOLDER (a copy made into the game's item called STATS);
       checks that change nothing a player would see: entity-list (the entity list moved),
       move-table [WHO] (the experience table moved, a party member's experience +100),
       loose-member ITEM, loose-slot-record ITEM, loose-reference ITEM (one of the item's
@@ -77,6 +78,8 @@ A <save> is a .lsv file or the save folder that holds one.
       What the game's packages hold that an item catalog needs: for every .pak under the
       folder, its version, parts and file count, and the root templates, item stats and
       language files in it. Reads only each package's header and file list.
+  catalog <game Data folder | folder from catalog-files> [--find TEXT] [--limit N]
+      The game's items with their English names, read from the game's own files.
   catalog-files <game Data folder> <out folder>
       Copy out of the game's packages the files an item catalog is built from: every root
       template list, the item stats (Object, Armor, Weapon) and the English text. They are
@@ -189,7 +192,7 @@ fn run(raw: &[String]) -> Result<()> {
             )?,
             out,
         ),
-        "items" => items(&Args::parse(rest, &[], &[])?, out),
+        "items" => items(&Args::parse(rest, &[], &["game"])?, out),
         "tables" => tables(&Args::parse(rest, &[], &[])?, out),
         "rows" => rows(&Args::parse(rest, &[], &["limit"])?, out),
         "entity" => entity(&Args::parse(rest, &[], &[])?, out),
@@ -198,9 +201,10 @@ fn run(raw: &[String]) -> Result<()> {
         "check" => check(&Args::parse(rest, &[], &[])?, out),
         "extract" => extract(&Args::parse(rest, &[], &[])?),
         "newage" => newage_blob(&Args::parse(rest, &[], &[])?),
-        "experiment" => experiment(&Args::parse(rest, &[], &[])?, out),
+        "experiment" => experiment(&Args::parse(rest, &[], &["game"])?, out),
         "survey" => survey(&Args::parse(rest, &[], &[])?, out),
         "catalog-files" => catalog_files(&Args::parse(rest, &[], &[])?, out),
+        "catalog" => catalog(&Args::parse(rest, &[], &["find", "limit"])?, out),
         "rewrite" => rewrite(&Args::parse(rest, &["reencode"], &[])?, out),
         "help" | "--help" | "-h" => {
             write!(out, "{USAGE}")?;
@@ -377,12 +381,15 @@ fn dump_node(
 }
 
 fn dump(args: &Args, out: &mut impl Write) -> Result<()> {
-    args.expect(
-        2,
-        "dump <save> <file.lsf> [--node ID | --path PATH] [--depth N]",
-    )?;
-    let save = Save::open(Path::new(&args.positional[0]))?;
-    let lsf = save.lsf(&args.positional[1])?;
+    let usage = "dump <save> <file.lsf> | <file.lsf> [--node ID | --path PATH] [--depth N]";
+    // A document on its own, such as one of the game's, or one inside a save.
+    let lsf = match args.positional.as_slice() {
+        [file] if file.to_lowercase().ends_with(".lsf") => {
+            Lsf::parse(&std::fs::read(file).with_context(|| file.clone())?)?
+        }
+        [save, file] => Save::open(Path::new(save))?.lsf(file)?,
+        _ => bail!("usage: nautiloid-cli {usage}"),
+    };
     let depth = args.number("depth")?;
     let start = match (args.number("node")?, args.get("path")) {
         (Some(id), _) => {
@@ -848,8 +855,19 @@ fn rows(args: &Args, out: &mut impl Write) -> Result<()> {
 }
 
 fn items(args: &Args, out: &mut impl Write) -> Result<()> {
-    args.expect(1, "items <save>")?;
+    args.expect(1, "items <save> [--game FOLDER]")?;
     let save = Save::open(Path::new(&args.positional[0]))?;
+    // With the game's files, the names players see.
+    let catalog = match args.get("game") {
+        Some(folder) => {
+            let folder = Path::new(folder);
+            Some(match folder.join("Shared.pak").is_file() {
+                true => nautiloid_save_editor::catalog::Catalog::from_game(folder)?,
+                false => nautiloid_save_editor::catalog::Catalog::from_folder(folder)?,
+            })
+        }
+        None => None,
+    };
     let globals = save.lsf(save::GLOBALS)?;
     let party = party::read(&globals, &NewAge::from_lsf(&globals)?)?;
     let mut supplies = 0u64;
@@ -873,10 +891,15 @@ fn items(args: &Args, out: &mut impl Write) -> Result<()> {
             } else {
                 ""
             };
+            let shown = catalog
+                .as_ref()
+                .and_then(|c| c.display_name(&item.template, &item.stats))
+                .map(|name| format!("{name}  ({})", item.stats))
+                .unwrap_or_else(|| item.stats.clone());
             writeln!(
                 out,
-                "  {amount:>6}  {}{supply}{bagged}  {}",
-                item.stats, item.entity
+                "  {amount:>6}  {shown}{supply}{bagged}  {}",
+                item.entity
             )?;
             supplies += item.supply.unwrap_or(0) as u64 * item.amount as u64;
         }
@@ -945,6 +968,32 @@ fn experiment(args: &Args, out: &mut impl Write) -> Result<()> {
             };
             let copy = items::copy_item_as(&mut globals, &mut entities, item()?, like, rows)?;
             writeln!(out, "copy {copy}")?;
+        }
+        "copy-to" => {
+            // A copy made into an item from the game's catalog, by its game name.
+            let stats = args
+                .positional
+                .get(5)
+                .ok_or_else(|| anyhow!("copy-to needs ITEM and the game name to make it"))?;
+            let folder = args
+                .get("game")
+                .ok_or_else(|| anyhow!("copy-to needs --game FOLDER"))?;
+            let folder = Path::new(folder);
+            let catalog = match folder.join("Shared.pak").is_file() {
+                true => nautiloid_save_editor::catalog::Catalog::from_game(folder)?,
+                false => nautiloid_save_editor::catalog::Catalog::from_folder(folder)?,
+            };
+            let target = catalog
+                .by_stats(stats)
+                .ok_or_else(|| anyhow!("the game has no item called {stats}"))?;
+            let copy = items::copy_item_to(
+                &mut globals,
+                &mut entities,
+                item()?,
+                &target.template,
+                stats,
+            )?;
+            writeln!(out, "copy {copy}: {} ({})", target.display, target.template)?;
         }
         "loose-member" => items::checks::loose_member_data(&mut entities, item()?)?,
         "loose-slot-record" => items::checks::loose_slot_data(&mut entities, item()?)?,
@@ -1041,6 +1090,54 @@ fn packages_under(root: &Path) -> Result<Vec<std::path::PathBuf>> {
     }
     paks.sort();
     Ok(paks)
+}
+
+fn catalog(args: &Args, out: &mut impl Write) -> Result<()> {
+    use nautiloid_save_editor::catalog::Catalog;
+    args.expect(
+        1,
+        "catalog <game Data folder | folder from catalog-files> [--find TEXT]",
+    )?;
+    let folder = Path::new(&args.positional[0]);
+    let started = std::time::Instant::now();
+    let catalog = match folder.join("Shared.pak").is_file() {
+        true => Catalog::from_game(folder)?,
+        false => Catalog::from_folder(folder)?,
+    };
+    let named = catalog
+        .items
+        .iter()
+        .filter(|i| !i.display.is_empty())
+        .count();
+    writeln!(
+        out,
+        "{} item templates, {named} with an English name, read in {:.1} s",
+        catalog.items.len(),
+        started.elapsed().as_secs_f64()
+    )?;
+    let find = args.get("find").map(str::to_lowercase);
+    let limit = args.number("limit")?.unwrap_or(40);
+    let matching = catalog.items.iter().filter(|i| match &find {
+        Some(text) => {
+            i.display.to_lowercase().contains(text)
+                || i.stats.to_lowercase().contains(text)
+                || i.name.to_lowercase().contains(text)
+        }
+        None => true,
+    });
+    for item in matching.take(limit) {
+        writeln!(
+            out,
+            "{:<36} {:<34} {:<7} {:<10} {:<18} {}",
+            item.display,
+            item.stats,
+            item.kind.label(),
+            item.rarity,
+            item.category,
+            item.template
+        )?;
+    }
+    Ok(())
 }
 
 fn catalog_files(args: &Args, out: &mut impl Write) -> Result<()> {

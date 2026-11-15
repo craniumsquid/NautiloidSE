@@ -306,6 +306,20 @@ command, which reads only each package's header and file list):
 - `Data/Localization/English.pak` holds `Localization/English/english.loca`, 30 MB.
 - The biggest packages (textures, voice, models) have a few bytes after their file list's
   entries, and their extra parts (`Textures_1.pak` and so on) have no header of their own.
+- The root template lists are LSF version 7 with metadata format 2 (saves write 0), stored
+  uncompressed, with the same 12-byte nodes and attributes as saves. Each `GameObjects` node
+  is a template: `MapKey` (as text; saves store it as a UUID), `Name`, `Type` (`item` for
+  items), `Stats`, `DisplayName` and `Description` (handles), `Icon`, and
+  `ParentTemplateId`, whose values fill in any the template leaves out. About 9,300 are
+  items, 9,100 of them with an English name.
+- The stats files are text: `new entry "NAME"`, `type`, `using "PARENT"` (filling in what
+  the entry leaves out) and `data "Key" "Value"`, including `RootTemplate`, `Rarity` and
+  `ObjectCategory`. Several templates can share one entry; its `RootTemplate` is the main one.
+- The language file is `LOCA`, the number of entries, where the texts start, then per entry
+  a 64-byte handle, a u16 version and a u32 length, then the texts in order, each ending in
+  a NUL.
+- Items added by mods are named in the mods' own packages, which the editor does not read
+  yet: in the samples, dyes, outfits and a few scrolls.
 
 ## Tried in the game
 

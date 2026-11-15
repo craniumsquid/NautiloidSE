@@ -57,6 +57,15 @@ pub struct Harness {
 
 impl Harness {
     pub fn new(saves_dir: Option<PathBuf>, size: [f32; 2]) -> Harness {
+        Harness::with_game(saves_dir, None, size)
+    }
+
+    /// With the game's `Data` folder, for the names players see.
+    pub fn with_game(
+        saves_dir: Option<PathBuf>,
+        game_dir: Option<PathBuf>,
+        size: [f32; 2],
+    ) -> Harness {
         let ctx = Context::default();
         let platform = Rc::new(RefCell::new(PlatformLog::default()));
         let app = EditorApp::new(
@@ -66,6 +75,7 @@ impl Harness {
                 saves_dir,
                 detect: false,
                 open: None,
+                game_dir,
                 now: Some(NOW),
             },
         );

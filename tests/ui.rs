@@ -155,6 +155,50 @@ fn mods_are_listed_with_whether_the_game_has_them_active() {
 }
 
 #[test]
+fn items_take_the_names_from_the_game_once_it_is_found() {
+    use nautiloid_save_editor::catalog::build::game_folder;
+    let (dir, mut ui) = open_sample("names");
+    // A game install somewhere else, with the sample's items in it.
+    let game = dir.join("Baldurs Gate 3");
+    game_folder(
+        &game,
+        &[
+            (
+                "00000000-0000-0000-0000-00000000dddd",
+                "OBJ_Potion_Healing",
+                "Potion of Healing",
+            ),
+            (
+                "00000000-0000-0000-0000-00000000cccc",
+                "OBJ_Rope",
+                "Rope of Climbing",
+            ),
+        ],
+    )
+    .unwrap();
+
+    // Without it, the game's internal names, made readable, and a way to point at it.
+    ui.click("Inventory");
+    assert!(ui.sees("the game wasn't found"));
+    assert!(ui.sees("Potion Healing"));
+    ui.platform.borrow_mut().folder_to_pick = Some(game.clone());
+    ui.click("Choose game folder…");
+    ui.settle();
+    assert!(!ui.sees("the game wasn't found"));
+    assert!(ui.sees("Potion of Healing"));
+    assert!(ui.sees("Rope of Climbing"));
+    // The internal name is still there, beneath.
+    assert!(ui.sees("OBJ_Potion_Healing"));
+    // An item the game's files don't have keeps its readable internal name.
+    assert!(ui.sees("Bag Alchemy Pouch"));
+    ui.click("+");
+    let change = ui.app.session().unwrap().changes().pop().unwrap();
+    assert_eq!(change.what, "Potion of Healing");
+    ui.snapshot("15-inventory-names");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn exporting_an_honour_mode_save_says_it_is_untried() {
     let dir = temp_dir("honour");
     sample_saves(&dir);

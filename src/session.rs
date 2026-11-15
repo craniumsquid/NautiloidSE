@@ -6,6 +6,7 @@
 //! is always exactly what an export would write, and reverting one puts back exactly what
 //! was there.
 
+use crate::catalog::Catalog;
 use crate::lsf::Lsf;
 use crate::mods::{self, Module};
 use crate::newage::NewAge;
@@ -15,6 +16,7 @@ use crate::saves::{self, SaveSummary};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Most steps that can be undone.
 const UNDO_LIMIT: usize = 200;
@@ -88,6 +90,8 @@ pub struct Session {
     mods: Vec<Module>,
     /// The mods the game has active, when the save is in the game's own folders.
     active: Option<mods::Active>,
+    /// The game's items, for the names players see, once read from the game's files.
+    catalog: Option<Arc<Catalog>>,
 }
 
 /// Finds each character's entry in the save's own summary, which is the only place the
@@ -230,6 +234,7 @@ impl Session {
             order,
             mods,
             active,
+            catalog: None,
         })
     }
 
@@ -261,6 +266,26 @@ impl Session {
     /// The party as the save has it.
     pub fn original(&self) -> &Party {
         &self.original
+    }
+
+    /// Gives the session the game's items, for naming them as the game does.
+    pub fn set_catalog(&mut self, catalog: Arc<Catalog>) {
+        self.catalog = Some(catalog);
+    }
+
+    /// Whether items are named as the game names them.
+    pub fn has_item_names(&self) -> bool {
+        self.catalog.is_some()
+    }
+
+    /// The name to show for an item: the one players see when the game's files have been
+    /// read, else its game name made readable.
+    pub fn item_name(&self, item: &party::Item) -> String {
+        self.catalog
+            .as_ref()
+            .and_then(|c| c.display_name(&item.template, &item.stats))
+            .map(str::to_owned)
+            .unwrap_or_else(|| tidy(&item.stats))
     }
 
     /// The mods the save lists, in its order.
@@ -463,7 +488,7 @@ impl Session {
                 let who = inventory.map_or_else(String::new, |i| self.holder_name(i.holder));
                 let what = inventory
                     .and_then(|i| i.items.get(item))
-                    .map_or_else(String::new, |item| tidy(&item.stats));
+                    .map_or_else(String::new, |item| self.item_name(item));
                 (who, what)
             }
         }

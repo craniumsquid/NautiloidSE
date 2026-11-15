@@ -161,8 +161,10 @@ impl Sections {
             unknown3: u16_at(data, 58),
             metadata_format: u32_at(data, 60),
         };
+        // Saves write 0. The game's own data files write 2, with the same layout as far as
+        // this reader goes: it reads them and checks every record as it would a save's.
         ensure!(
-            header.metadata_format == 0,
+            header.metadata_format == 0 || header.metadata_format == 2,
             "LSF metadata format {} is not supported",
             header.metadata_format
         );

@@ -126,6 +126,9 @@ pub struct Item {
     /// The game's own name for what it is, for example `FOOD_FRUIT_APPLE`. The names shown in
     /// the game are in its language files, not in the save.
     pub stats: String,
+    /// The template it was made from, as its creator in the node tree gives it. With the
+    /// game's own files, this gives the name players see.
+    pub template: String,
     /// How many there are: 1 for an item that is not a stack.
     pub amount: u32,
     /// Whether the amount can be changed. Only a stack has one stored.
@@ -642,6 +645,7 @@ pub fn read(globals: &Lsf, entities: &NewAge) -> Result<Party> {
         held.entry(holder).or_default().push(Item {
             entity: id,
             stats: stats.get(&id).cloned().unwrap_or_default(),
+            template: templates.get(&id).cloned().unwrap_or_default(),
             amount: stacked.map_or(1, |s| s.amount),
             stacked: stacked.is_some(),
             in_container,

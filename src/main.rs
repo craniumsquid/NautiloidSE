@@ -67,6 +67,7 @@ fn main() -> eframe::Result {
             let options = Options {
                 detect: true,
                 open,
+                game_dir: None,
                 ..Options::default()
             };
             Ok(Box::new(App {

@@ -36,6 +36,10 @@ const SIGHT: &str = "game.sight.v0.DataComponent";
 /// `NewStackComponent`, and every other item in it a `StackMemberComponent`.
 const STACKED: &str = "game.inventory.v0.NewStackComponent";
 const STACK_MEMBER: &str = "game.inventory.v0.StackMemberComponent";
+/// An offset to the item's template identifier as text, then its length.
+const TEMPLATE: &str = "game.templates.v0.TemplateComponent";
+/// The same, for what it looks like.
+const VISUAL: &str = "game.visual.v5.GameObjectVisualComponent";
 /// On an item someone is wearing or wielding: an offset to that character's identifier.
 const WIELDING: &str = "game.inventory.v0.WieldingComponent";
 /// On an item the story depends on.
@@ -449,6 +453,59 @@ pub fn copy_item_as(
             }
         }
     }
+    Ok(copy)
+}
+
+/// Copies `item` and makes the copy into the item made from `template`, with the game name
+/// `stats`: the copy's nodes take the template and name, and its template and visual rows
+/// point at the template's identifier. Everything else stays as the original's, so this is
+/// for an item of the same kind. Returns the copy.
+pub fn copy_item_to(
+    globals: &mut Lsf,
+    entities: &mut NewAge,
+    item: Uuid,
+    template: &str,
+    stats: &str,
+) -> Result<Uuid> {
+    let template_id =
+        Uuid::parse(template).ok_or_else(|| anyhow!("{template} is not a template identifier"))?;
+    let (donor, _) = item_nodes(globals, item)?;
+    ensure!(
+        globals.get(donor, "TemplateType") == Some(Value::Byte(0)),
+        "only an item made from one of the game's own templates can be copied as another"
+    );
+    let copy = copy_item(globals, entities, item)?;
+    let copy_index = entities
+        .entity_index(copy)
+        .ok_or_else(|| anyhow!("the copy is missing"))?;
+
+    // The template's identifier as the rows hold it: text, at the end of the data.
+    let text = template_id.to_string();
+    let text_at = entities.append(text.as_bytes());
+    for name in [TEMPLATE, VISUAL] {
+        let Some(id) = entities.table(name) else {
+            continue;
+        };
+        let Some(row) = entities.row_of(id, copy_index) else {
+            continue;
+        };
+        let at = (entities.row_offset(id, row) - 48) as u64;
+        let mut fields = entities.row(id, row)[..12].to_vec();
+        fields[0..8].copy_from_slice(&text_at.to_le_bytes());
+        fields[8..12].copy_from_slice(&(text.len() as u32).to_le_bytes());
+        entities.set_data(at, &fields)?;
+    }
+
+    let (creator, node) = item_nodes(globals, copy)?;
+    let set = |globals: &mut Lsf, node: NodeId, name: &str, value: Value| -> Result<()> {
+        let attr = globals
+            .attr(node, name)
+            .ok_or_else(|| anyhow!("the item's nodes have no {name}"))?;
+        globals.set_value(attr, &value)
+    };
+    set(globals, creator, "TemplateID", Value::Uuid(template_id))?;
+    set(globals, node, "CurrentTemplate", Value::Uuid(template_id))?;
+    set(globals, node, "Stats", Value::Text(stats.to_owned()))?;
     Ok(copy)
 }
 
