@@ -43,8 +43,9 @@ and of what NPCs carry or wear, items made from another of the same kind or of a
 new stacks, scrolls of other spells, and copies between a character and the camp chest. A
 scroll made from something that isn't a scroll hasn't been tried; the app says so.
 
-An exported quicksave or autosave is written as a manual save, so the game lists it by its
-name and doesn't replace it as it does its own autosaves. An Honour Mode save stays one.
+An exported quicksave or autosave is written as a manual save, so the game's load menu lists
+it by its name (it lists its own autosaves as "Autosave 4" whatever they're called). An
+Honour Mode save stays one.
 
 It also lists the mods a save asks for, marked by whether your game has them active. That
 list is read only: the game's own mod manager is the place to change it.

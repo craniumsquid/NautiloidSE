@@ -399,6 +399,7 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | A Scroll of Burning Hands made into a Scroll of Lightning Bolt with a spell record of its own naming the spell | Loads, but with no description, and it can't be cast |
 | The same, but copied without its spell book and its "data populated" mark | Loads and works: the game fills the spell in from the template |
 | Clothes from the camp chest copied to the main character; a quarterstaff of theirs copied into the camp chest; an NPC's Scroll of Fireball copied to the main character | Each loads and works |
+| Three saves made from an autosave, written with `SaveGameType` 0 | The load menu lists them by their names; autosaves, an export left as one included, are listed as "Autosave 4 - Wilderness" whatever the file is called |
 
 Every failure looks the same: the save loads to 100%, drops to the title screen, and shows
 "Server shutting down". Other saves load normally afterwards.

@@ -86,8 +86,10 @@ character or the camp chest, up to 20 of each per export.
   Inventory tab puts a + beside it to add more.
 - Items the game marks as story items are offered with a warning that a quest may count on
   there being only one.
-- An exported quicksave or autosave is written as a manual save: the game showed eleven
-  test saves made from one autosave all alike in its load menu.
+- An exported quicksave or autosave is written as a manual save. The game lists its own
+  quicksaves and autosaves as "Autosave 4 - Wilderness" and the like, whatever the file is
+  called, so eleven test saves made from one autosave all looked alike in its load menu; as
+  manual saves they are listed by their names.
 - Before any table of records is moved to add to it, the editor checks the save for pointers
   into that table it doesn't know about, and refuses rather than leave them behind.
 - Not done: items from mods, whose names are in the mods' own files.
