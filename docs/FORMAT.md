@@ -403,6 +403,7 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | Clothes from the camp chest copied to the main character; a quarterstaff of theirs copied into the camp chest; an NPC's Scroll of Fireball copied to the main character | Each loads and works |
 | Three saves made from an autosave, written with `SaveGameType` 0 | The load menu lists them by their names; autosaves, an export left as one included, are listed as "Autosave 4 - Wilderness" whatever the file is called |
 | Made by the app's own export: a stack of three Scrolls of Lightning Bolt made from a Scroll of Speak with Dead, a stack of Potions of Speed, Phalar Aluve and the Haste Helm for a character; a stack of healing potions and a Spear +1 copied from an NPC's for the camp chest. By the command-line tool: a Scroll of Haste made from an oil | Each loads and works; the scrolls cast. Items made from ones marked as wares were marked as wares too |
+| Made by the app's own export, with the wares bit cleared: the Haste Helm made from an Ignoble Hat marked as wares, and plain copies of a Goblin Scimitar and the Ignoble Hat | Loads; none of the three is marked as wares, and the originals still are |
 
 Every failure looks the same: the save loads to 100%, drops to the title screen, and shows
 "Server shutting down". Other saves load normally afterwards.

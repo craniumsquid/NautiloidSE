@@ -153,7 +153,8 @@ in, an NPC's Scroll of Fireball, and copies from the camp chest to a character a
 scroll given a spell record of its own did not work. Round 11 tries the app's own export
 for these, a scroll made from an oil, and exports from an autosave written as manual saves;
 all worked. Items copied from ones marked as wares came out marked too, so new items now have
-that mark cleared.
+that mark cleared; round 12 confirmed it (a copy of a wares item, and an item made from one,
+unmarked, the originals still marked).
 
 Phase 0 is built and passes on all eleven sample saves:
 
