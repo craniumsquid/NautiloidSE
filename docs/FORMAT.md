@@ -356,6 +356,9 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | A copy of a Revivify scroll given Speak with Dead's template and game name in the tree, all its rows still Revivify's | Loads and shows as Speak with Dead, with no description; it can't be cast on a valid target |
 | The same, and Speak with Dead's template and visual rows too | The same |
 | A copy of the scroll given a Potion of Speed's template and game name, all its rows still the scroll's | Loads and works as a Potion of Speed |
+| A copy of a dagger given the template and game name of Longsword +1, which the save has nowhere, and its template and visual rows pointed at that template's identifier | Loads and works as a Longsword +1 |
+| The same, from a dagger to Dagger +1; from a shield to Adamantine Shield; from a Potion of Speed to a Potion of Invisibility | Each loads and works as the new item, its special effects included |
+| The same, from a hat to Cap of Wrath, whose stats say `Unique` | The copy stays an Ignoble Hat |
 | The second version's copy moved in the game to another character who had the same scroll, then saved by the game | The game merged them into one stack of 2 on that character, as it does for any two such scrolls, and its own save passes every check. Its identifier is gone, as a merged item's is |
 | Made in the app: two companions' approval 0 → 50; a companion at camp's Strength points 0 → 18; a stack of healing potions 1 → 21; a stack of fish in the camp chest, worth 4 camp supplies each, 2 → 14 | Loads. The character sheet shows approval as "High (50)". Camp supplies show 335, up from 287 by the 48 the twelve fish are worth. After the companion is swapped into the party and the game saves again, that save has approval at 50, the stacks at 21 and 14, the companion's Strength at 26 with the 18 points kept, and experience awarded to them to match the party |
 
