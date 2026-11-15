@@ -498,7 +498,7 @@ impl Catalog {
     }
 
     /// The listed items whose name or game name holds `text`, ignoring case.
-    pub fn search<'a>(&'a self, text: &'a str) -> impl Iterator<Item = &'a CatalogItem> + 'a {
+    pub fn search<'a>(&'a self, text: &str) -> impl Iterator<Item = &'a CatalogItem> + 'a {
         let text = text.trim().to_lowercase();
         self.listed().filter(move |item| {
             item.display.to_lowercase().contains(&text) || item.stats.to_lowercase().contains(&text)

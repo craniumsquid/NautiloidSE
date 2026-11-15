@@ -1,13 +1,14 @@
 //! The Inventory tab: what each character and the camp chest hold, how many each stack
 //! holds, and items to add.
 
+use super::dialogs;
 use super::game::{self, GameFiles};
 use super::party::field_stepper;
 use super::widgets::{self, Kind};
 use super::{theme, Action};
 use crate::party::{Holder, Item};
 use crate::session::{Field, Session};
-use eframe::egui::{self, Id, Margin, Ui};
+use eframe::egui::{self, Align, Id, Layout, Margin, Ui};
 
 /// The game's name for an item and what else is worth knowing about it.
 fn detail(item: &Item) -> String {
@@ -75,25 +76,33 @@ pub fn show(ui: &mut Ui, session: &Session, game: &GameFiles, actions: &mut Vec<
         .data(|d| d.get_temp::<String>(search_id))
         .unwrap_or_default();
     let inventory = &party.inventories[chosen];
+    let who = session.holder_in_sentence(inventory.holder);
+    // Filtering what the holder has, on the left; adding from the game's items, the tab's
+    // own action, on the right.
     ui.horizontal(|ui| {
         ui.add(
             egui::TextEdit::singleline(&mut search)
-                .hint_text("Search items")
+                .hint_text(format!("Filter {who}'s items"))
                 .desired_width(280.0)
                 .margin(Margin::symmetric(10.0, 7.0)),
         );
-        let can_add = session.catalog().is_some();
-        let add = ui
-            .add_enabled_ui(can_add, |ui| {
-                widgets::button(ui, "Add items…", Kind::Secondary)
-            })
-            .inner;
-        if add.clicked() {
-            actions.push(Action::AskAddItem(inventory.holder));
-        }
-        if !can_add {
-            add.on_disabled_hover_text("Needs the game's files, for what items there are.");
-        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let can_add = session.catalog().is_some();
+            let add = ui
+                .add_enabled_ui(can_add, |ui| {
+                    widgets::button(ui, &format!("Add items to {who}…"), Kind::Primary)
+                })
+                .inner;
+            if add.clicked() {
+                actions.push(Action::AskAddItem(
+                    inventory.holder,
+                    search.trim().to_owned(),
+                ));
+            }
+            if !can_add {
+                add.on_disabled_hover_text("Needs the game's files, for what items there are.");
+            }
+        });
     });
     ui.data_mut(|d| d.insert_temp(search_id, search.clone()));
     ui.add_space(8.0);
@@ -132,6 +141,10 @@ pub fn show(ui: &mut Ui, session: &Session, game: &GameFiles, actions: &mut Vec<
     widgets::card(ui, |ui| {
         ui.set_width(ui.available_width());
         widgets::section_title(ui, &format!("Single items ({singles})"));
+        if singles == 0 && !wanted.is_empty() {
+            ui.label(egui::RichText::new("None match.").color(theme::MUTED));
+            return;
+        }
         ui.add(
             egui::Label::new(
                 egui::RichText::new(
@@ -174,6 +187,7 @@ pub fn show(ui: &mut Ui, session: &Session, game: &GameFiles, actions: &mut Vec<
                 }
             });
     });
+    from_the_game(ui, session, inventory.holder, &search, actions);
 }
 
 /// The items to be added for `holder`, with how many of each.
@@ -245,4 +259,45 @@ fn more_button(
             }
         }
     }
+}
+
+/// The game's items that match the filter, to add: so a search for what isn't there finds
+/// it in the game.
+fn from_the_game(
+    ui: &mut Ui,
+    session: &Session,
+    holder: Holder,
+    search: &str,
+    actions: &mut Vec<Action>,
+) {
+    const SHOWN: usize = 5;
+    let Some(catalog) = session.catalog() else {
+        return;
+    };
+    if search.trim().chars().count() < dialogs::MIN_SEARCH {
+        return;
+    }
+    let found = dialogs::matching(catalog, search);
+    let who = session.holder_in_sentence(holder);
+    ui.add_space(8.0);
+    widgets::card(ui, |ui| {
+        ui.set_width(ui.available_width());
+        widgets::section_title(ui, &format!("Add to {who} from the game's items"));
+        if found.is_empty() {
+            ui.label(
+                egui::RichText::new("No item in the game's files is called that.")
+                    .color(theme::MUTED),
+            );
+        }
+        ui.spacing_mut().item_spacing.y = 6.0;
+        for item in found.iter().take(SHOWN) {
+            dialogs::found_item(ui, session, holder, item, actions);
+        }
+        if found.len() > SHOWN {
+            let text = format!("See all {} matches…", found.len());
+            if widgets::button(ui, &text, Kind::Quiet).clicked() {
+                actions.push(Action::AskAddItem(holder, search.trim().to_owned()));
+            }
+        }
+    });
 }

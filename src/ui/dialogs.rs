@@ -268,7 +268,7 @@ fn add_item(
     }
 
     let wanted = query.trim().to_lowercase();
-    if wanted.chars().count() < 2 {
+    if wanted.chars().count() < MIN_SEARCH {
         ui.label(
             egui::RichText::new(format!(
                 "Type part of a name to search the game's {} items.",
@@ -277,9 +277,7 @@ fn add_item(
             .color(theme::MUTED),
         );
     } else {
-        let mut found: Vec<&CatalogItem> = catalog.search(&wanted).collect();
-        // Names that start with what was typed first, each lot by name.
-        found.sort_by_key(|item| !item.display.to_lowercase().starts_with(&wanted));
+        let found = matching(catalog, &wanted);
         if found.is_empty() {
             ui.label(
                 egui::RichText::new("No item in the game's files is called that.")
@@ -313,8 +311,27 @@ fn add_item(
     });
 }
 
+/// The fewest letters a search of the game's items starts with.
+pub const MIN_SEARCH: usize = 2;
+
+/// The game's items whose names hold `wanted`: names that start with it first, then names
+/// that hold it, then those whose game name alone does; each lot by name.
+pub fn matching<'a>(catalog: &'a crate::catalog::Catalog, wanted: &str) -> Vec<&'a CatalogItem> {
+    let wanted = wanted.trim().to_lowercase();
+    let mut found: Vec<&CatalogItem> = catalog.search(&wanted).collect();
+    found.sort_by_key(|item| {
+        let name = item.display.to_lowercase();
+        match (name.starts_with(&wanted), name.contains(&wanted)) {
+            (true, _) => 0,
+            (false, true) => 1,
+            _ => 2,
+        }
+    });
+    found
+}
+
 /// One item the search found: what it is, and a way to add it or why it can't be.
-fn found_item(
+pub fn found_item(
     ui: &mut Ui,
     session: &Session,
     holder: Holder,

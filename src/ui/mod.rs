@@ -126,8 +126,8 @@ pub enum Action {
     Reveal(PathBuf),
     /// Ask where the game is, for the names players see.
     PickGameFolder,
-    /// Choose items from the game's to add for this holder.
-    AskAddItem(Holder),
+    /// Choose items from the game's to add for this holder, the search starting with this.
+    AskAddItem(Holder, String),
     /// Add one more of the item with these stats for this holder.
     AddItem(Holder, String),
 }
@@ -693,11 +693,8 @@ impl EditorApp {
                 }
             }
             Action::CloseDialog => self.dialog = None,
-            Action::AskAddItem(holder) => {
-                self.dialog = Some(Dialog::AddItem {
-                    holder,
-                    query: String::new(),
-                })
+            Action::AskAddItem(holder, query) => {
+                self.dialog = Some(Dialog::AddItem { holder, query })
             }
             Action::AddItem(holder, stats) => {
                 if let Some(session) = &mut self.session {

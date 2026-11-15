@@ -101,7 +101,7 @@ fn inventory_lists_holders_and_changes_a_stack() {
 
     // Searching narrows the list.
     ui.click("Tav");
-    ui.click("Search items");
+    ui.click("Filter Tav's items");
     ui.type_text("rope");
     assert!(ui.sees("STACKS (0)"));
     assert!(ui.sees("SINGLE ITEMS (1)"));
@@ -250,13 +250,13 @@ fn adds_items_from_the_games_files() {
 
     // Without the game's files there is nothing to choose from.
     ui.click("Inventory");
-    ui.click("Add items…");
+    ui.click("Add items to Tav…");
     assert!(ui.app.dialog().is_none());
     ui.platform.borrow_mut().folder_to_pick = Some(game.clone());
     ui.click("Choose game folder…");
     ui.settle();
 
-    ui.click("Add items…");
+    ui.click("Add items to Tav…");
     assert!(ui.sees("Add items for Tav"));
     assert!(ui.sees("search the game's 4 items"));
     ui.type_text("rope");
@@ -311,6 +311,27 @@ fn adds_items_from_the_games_files() {
     assert_eq!(whats, ["Add Rope", "Add Silk Rope", "Add Longsword +1"]);
     ui.snapshot("16b-adding");
 
+    // Filtering for something Tav doesn't have finds it among the game's items, to add
+    // there and then, or in the dialog with the search already made.
+    ui.click("Filter Tav's items");
+    ui.type_text("silk");
+    assert!(ui.sees("SINGLE ITEMS (0)"));
+    assert!(ui.sees("ADD TO TAV FROM THE GAME'S ITEMS"));
+    assert!(ui.sees("Silk Rope"));
+    ui.snapshot("16c-filter-finds-the-game's-items");
+    ui.click("Add");
+    assert_eq!(
+        ui.app
+            .session()
+            .unwrap()
+            .added(Holder::Character(0), "OBJ_Rope_Silk"),
+        2
+    );
+    ui.click("Add items to Tav…");
+    assert!(ui.sees("Silk Rope"));
+    assert!(ui.sees("2 added"));
+    ui.click("Done");
+
     ui.click("Export as a new save…");
     ui.click("Export");
     let exported =
@@ -321,7 +342,7 @@ fn adds_items_from_the_games_files() {
         .map(|i| i.stats.as_str())
         .collect();
     assert_eq!(tav.iter().filter(|s| **s == "OBJ_Rope").count(), 4);
-    assert_eq!(tav.iter().filter(|s| **s == "OBJ_Rope_Silk").count(), 1);
+    assert_eq!(tav.iter().filter(|s| **s == "OBJ_Rope_Silk").count(), 2);
     assert_eq!(tav.iter().filter(|s| **s == "WPN_Longsword_1").count(), 1);
     std::fs::remove_dir_all(&dir).unwrap();
 }
