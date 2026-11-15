@@ -258,6 +258,12 @@ What adding an item would have to touch, from an unstacked scroll in a character
 - **Stacks.** A stack is one item with a count. When the game merged two single scrolls, it
   kept one entity, gave it a `NewStackComponent` (an offset to a `Stack` record: one item,
   one `StackEntry` with the amount 2) and a `StackMemberComponent`, and deleted the other.
+- **What the game rebuilds.** An item's name and icon follow its template on load; its rows
+  from another kind of item did not matter for a potion. A scroll's spell does not: it is a
+  `game.spell.v3.SpellBookComponent` pair of offsets to a 72-byte `SpellData` record, which
+  points at a `game.spell.v0.SpellId` record (24 bytes: an offset, then the spell's name as
+  an offset and a length: `Teleportation_Revivify_Scroll`, `Target_SpeakWithDead`).
+  Pointers into the `SpellId` table come from five kinds of record.
 - **Not an item.** A character can be carried too: one sample has a corpse in Karlach's
   pack, with a character creator and no `game.item.v0.ItemComponent`.
 
@@ -287,6 +293,19 @@ record from an inventory's list, most of the entity list is pointed at by nothin
 5,000 rows), and every owner list is sorted. Slot numbers have gaps in most inventories and
 the position counter runs well past the number of items, but no two items share a position,
 so the next slot and position after the highest are what the game would use.
+
+## The game's own data
+
+What an item catalog is built from, as one Patch 8 install has it (from the `survey`
+command, which reads only each package's header and file list):
+
+- `Data/Shared.pak`, `Data/Gustav.pak` (13 GB, 145,832 files) and `Data/GustavX.pak` hold
+  `Public/<module>/RootTemplates/_merged.lsf` for the modules Shared, SharedDev, Gustav,
+  GustavDev, GustavX and Honour, and `Public/<module>/Stats/Generated/Data/Object.txt`,
+  `Armor.txt` and `Weapon.txt`. All are LZ4-compressed, in one part.
+- `Data/Localization/English.pak` holds `Localization/English/english.loca`, 30 MB.
+- The biggest packages (textures, voice, models) have a few bytes after their file list's
+  entries, and their extra parts (`Textures_1.pak` and so on) have no header of their own.
 
 ## Tried in the game
 
@@ -320,6 +339,9 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | Only the scroll's `MemberData` copied to the loose data and pointed at | Hangs at 75% |
 | Only the scroll's slot record copied to the loose data and pointed at | Hangs at 75% |
 | Only the scroll's identifier copied to the loose data, and its slot record pointed at that | Loads |
+| A copy of a Revivify scroll given Speak with Dead's template and game name in the tree, all its rows still Revivify's | Loads and shows as Speak with Dead, with no description; it can't be cast on a valid target |
+| The same, and Speak with Dead's template and visual rows too | The same |
+| A copy of the scroll given a Potion of Speed's template and game name, all its rows still the scroll's | Loads and works as a Potion of Speed |
 | The second version's copy moved in the game to another character who had the same scroll, then saved by the game | The game merged them into one stack of 2 on that character, as it does for any two such scrolls, and its own save passes every check. Its identifier is gone, as a merged item's is |
 | Made in the app: two companions' approval 0 → 50; a companion at camp's Strength points 0 → 18; a stack of healing potions 1 → 21; a stack of fish in the camp chest, worth 4 camp supplies each, 2 → 14 | Loads. The character sheet shows approval as "High (50)". Camp supplies show 335, up from 287 by the 48 the twelve fish are worth. After the companion is swapped into the party and the game saves again, that save has approval at 50, the stacks at 21 and 14, the companion's Strength at 26 with the 18 points kept, and experience awarded to them to match the party |
 

@@ -77,6 +77,10 @@ A <save> is a .lsv file or the save folder that holds one.
       What the game's packages hold that an item catalog needs: for every .pak under the
       folder, its version, parts and file count, and the root templates, item stats and
       language files in it. Reads only each package's header and file list.
+  catalog-files <game Data folder> <out folder>
+      Copy out of the game's packages the files an item catalog is built from: every root
+      template list, the item stats (Object, Armor, Weapon) and the English text. They are
+      the game's own files: for working on the catalog, not for sharing.
   newage <save> <file.lsf> <out>
       Write a document's entity data (its NewAge blob) to <out>.
   rewrite <save> <out.lsv> [--reencode]
@@ -196,6 +200,7 @@ fn run(raw: &[String]) -> Result<()> {
         "newage" => newage_blob(&Args::parse(rest, &[], &[])?),
         "experiment" => experiment(&Args::parse(rest, &[], &[])?, out),
         "survey" => survey(&Args::parse(rest, &[], &[])?, out),
+        "catalog-files" => catalog_files(&Args::parse(rest, &[], &[])?, out),
         "rewrite" => rewrite(&Args::parse(rest, &["reencode"], &[])?, out),
         "help" | "--help" | "-h" => {
             write!(out, "{USAGE}")?;
@@ -970,22 +975,7 @@ fn experiment(args: &Args, out: &mut impl Write) -> Result<()> {
 fn survey(args: &Args, out: &mut impl Write) -> Result<()> {
     args.expect(1, "survey <game Data folder>")?;
     let root = Path::new(&args.positional[0]);
-    let mut paks = Vec::new();
-    let mut folders = vec![root.to_path_buf()];
-    while let Some(folder) = folders.pop() {
-        for entry in std::fs::read_dir(&folder).with_context(|| folder.display().to_string())? {
-            let path = entry?.path();
-            if path.is_dir() {
-                folders.push(path);
-            } else if path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("pak"))
-            {
-                paks.push(path);
-            }
-        }
-    }
-    paks.sort();
+    let paks = packages_under(root)?;
     let wanted = |name: &str| {
         name.contains("RootTemplates")
             || name.contains("Stats/Generated/Data/")
@@ -1029,6 +1019,61 @@ fn survey(args: &Args, out: &mut impl Write) -> Result<()> {
             Err(error) => writeln!(out, "== {shown}  {} MB: {error:#}", size / 1_000_000)?,
         }
     }
+    Ok(())
+}
+
+/// The game's packages under a folder, its subfolders included.
+fn packages_under(root: &Path) -> Result<Vec<std::path::PathBuf>> {
+    let mut paks = Vec::new();
+    let mut folders = vec![root.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(&folder).with_context(|| folder.display().to_string())? {
+            let path = entry?.path();
+            if path.is_dir() {
+                folders.push(path);
+            } else if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("pak"))
+            {
+                paks.push(path);
+            }
+        }
+    }
+    paks.sort();
+    Ok(paks)
+}
+
+fn catalog_files(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(2, "catalog-files <game Data folder> <out folder>")?;
+    let root = Path::new(&args.positional[0]);
+    let target = Path::new(&args.positional[1]);
+    let wanted = |name: &str| {
+        name.ends_with("RootTemplates/_merged.lsf")
+            || ["Object.txt", "Armor.txt", "Weapon.txt"]
+                .iter()
+                .any(|f| name.ends_with(&format!("Stats/Generated/Data/{f}")))
+            || name == "Localization/English/english.loca"
+    };
+    let mut total = 0;
+    for path in packages_under(root)? {
+        let Ok(listing) = lspk::list(&path) else {
+            continue;
+        };
+        let names: Vec<&str> = listing
+            .files
+            .iter()
+            .filter(|f| f.len > 0 && wanted(&f.name))
+            .map(|f| f.name.as_str())
+            .collect();
+        if names.is_empty() {
+            continue;
+        }
+        let found =
+            lspk::extract(&path, &names, target).with_context(|| path.display().to_string())?;
+        writeln!(out, "{found:>4} files from {}", path.display())?;
+        total += found;
+    }
+    writeln!(out, "{total} files written to {}", target.display())?;
     Ok(())
 }
 

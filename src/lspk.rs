@@ -490,9 +490,11 @@ pub fn peek(path: &std::path::Path, names: &[&str]) -> Result<Vec<Option<Vec<u8>
     file.read_exact(&mut list)?;
     let count = u32_at(&list, 0) as usize;
     ensure!(count <= 1 << 20, "implausible file count {count}");
-    let table = lz4_flex::block::decompress(&list[8..], count * ENTRY_LEN)
+    // The game's biggest packages have a few bytes after the entries.
+    let mut table = lz4_flex::block::decompress(&list[8..], count * ENTRY_LEN + 64)
         .map_err(|e| anyhow!("file list: {e}"))?;
-    ensure!(table.len() == count * ENTRY_LEN, "file list is truncated");
+    ensure!(table.len() >= count * ENTRY_LEN, "file list is truncated");
+    table.truncate(count * ENTRY_LEN);
 
     let mut found = vec![None; names.len()];
     for raw in table.chunks_exact(ENTRY_LEN) {
@@ -523,6 +525,23 @@ pub fn peek(path: &std::path::Path, names: &[&str]) -> Result<Vec<Option<Vec<u8>
             uncompressed_len
         };
         found[wanted] = Some(unpack_stored(name, method, &stored, expected)?);
+    }
+    Ok(found)
+}
+
+/// Copies the files named out of a package on disk into `out`, keeping their paths, without
+/// loading the rest. Returns how many were found.
+pub fn extract(path: &std::path::Path, names: &[&str], out: &std::path::Path) -> Result<usize> {
+    let mut found = 0;
+    for (name, contents) in names.iter().zip(peek(path, names)?) {
+        if let Some(contents) = contents {
+            let target = out.join(name);
+            if let Some(folder) = target.parent() {
+                std::fs::create_dir_all(folder)?;
+            }
+            std::fs::write(&target, contents)?;
+            found += 1;
+        }
     }
     Ok(found)
 }
@@ -578,9 +597,11 @@ pub fn list(path: &std::path::Path) -> Result<Listing> {
     file.read_exact(&mut list)?;
     let count = u32_at(&list, 0) as usize;
     ensure!(count <= 1 << 22, "implausible file count {count}");
-    let table = lz4_flex::block::decompress(&list[8..], count * ENTRY_LEN)
+    // The game's biggest packages have a few bytes after the entries.
+    let mut table = lz4_flex::block::decompress(&list[8..], count * ENTRY_LEN + 64)
         .map_err(|e| anyhow!("file list: {e}"))?;
-    ensure!(table.len() == count * ENTRY_LEN, "file list is truncated");
+    ensure!(table.len() >= count * ENTRY_LEN, "file list is truncated");
+    table.truncate(count * ENTRY_LEN);
     for raw in table.chunks_exact(ENTRY_LEN) {
         let name_len = raw[..NAME_LEN]
             .iter()
@@ -642,6 +663,29 @@ pub fn build(files: &[(&str, &[u8])]) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn extracts_named_files_keeping_their_paths() {
+        let bytes = build(&[
+            ("Public/Shared/RootTemplates/_merged.lsf", b"templates"),
+            ("other.txt", b"left alone"),
+        ])
+        .unwrap();
+        let dir = std::env::temp_dir().join(format!("nautiloid-extract-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pak = dir.join("Shared.pak");
+        std::fs::write(&pak, &bytes).unwrap();
+        let out = dir.join("out");
+        let names = ["Public/Shared/RootTemplates/_merged.lsf", "missing.txt"];
+        assert_eq!(extract(&pak, &names, &out).unwrap(), 1);
+        assert_eq!(
+            std::fs::read(out.join("Public/Shared/RootTemplates/_merged.lsf")).unwrap(),
+            b"templates"
+        );
+        assert!(!out.join("other.txt").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn lists_a_package_without_loading_it() {
         let bytes = build(&[("a.lsf", b"first"), ("dir/b.txt", b"second file")]).unwrap();
