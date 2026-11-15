@@ -97,6 +97,9 @@ pub struct Catalog {
     pub items: Vec<CatalogItem>,
     by_template: HashMap<String, usize>,
     by_stats: HashMap<String, usize>,
+    /// One of each item players can tell apart: the main template of each game name that
+    /// has an English name, by name.
+    listed: Vec<usize>,
 }
 
 /// A template as read, before its parent fills it in.
@@ -349,10 +352,21 @@ impl Catalog {
                 by_stats.insert(name.clone(), i);
             }
         }
+        let mut listed: Vec<usize> = by_stats
+            .values()
+            .copied()
+            .filter(|&i| !items[i].display.is_empty() && items[i].kind != Kind::Other)
+            .collect::<HashSet<usize>>()
+            .into_iter()
+            .collect();
+        listed.sort_by(|&a, &b| {
+            (&items[a].display, &items[a].stats).cmp(&(&items[b].display, &items[b].stats))
+        });
         Ok(Catalog {
             items,
             by_template,
             by_stats,
+            listed,
         })
     }
 
@@ -410,6 +424,19 @@ impl Catalog {
                 true => Ok(Some(std::fs::read(&path)?)),
                 false => Ok(None),
             }
+        })
+    }
+
+    /// One of each item players can tell apart, by name: what to offer when adding items.
+    pub fn listed(&self) -> impl Iterator<Item = &CatalogItem> {
+        self.listed.iter().map(|&i| &self.items[i])
+    }
+
+    /// The listed items whose name or game name holds `text`, ignoring case.
+    pub fn search<'a>(&'a self, text: &'a str) -> impl Iterator<Item = &'a CatalogItem> + 'a {
+        let text = text.trim().to_lowercase();
+        self.listed().filter(move |item| {
+            item.display.to_lowercase().contains(&text) || item.stats.to_lowercase().contains(&text)
         })
     }
 
@@ -520,36 +547,78 @@ pub mod build {
         head
     }
 
+    /// An item for [`game_folder_with`].
+    pub struct GameItem<'a> {
+        pub template: &'a str,
+        pub stats: &'a str,
+        pub display: &'a str,
+        pub kind: Kind,
+        /// `ObjectCategory` for an object, `Slot` for armour.
+        pub category: &'a str,
+    }
+
     /// Writes `<dir>/Data` with `Shared.pak` and `Localization/English.pak` holding these
-    /// items, each given as template identifier, game name and English name, and returns
-    /// the `Data` folder.
+    /// items, each given as template identifier, game name and English name, all objects
+    /// of no category, and returns the `Data` folder.
     pub fn game_folder(dir: &Path, items: &[(&str, &str, &str)]) -> Result<PathBuf> {
+        let items: Vec<GameItem> = items
+            .iter()
+            .map(|&(template, stats, display)| GameItem {
+                template,
+                stats,
+                display,
+                kind: Kind::Object,
+                category: "",
+            })
+            .collect();
+        game_folder_with(dir, &items)
+    }
+
+    /// Writes `<dir>/Data` holding these items, and returns the `Data` folder.
+    pub fn game_folder_with(dir: &Path, items: &[GameItem]) -> Result<PathBuf> {
         let data = dir.join("Data");
         std::fs::create_dir_all(data.join("Localization"))?;
         let mut templates = Node::new("Templates");
-        let mut objects = String::new();
+        let mut stats_files: HashMap<&str, String> = HashMap::new();
         let mut texts = Vec::new();
         let handles: Vec<String> = (0..items.len()).map(|i| format!("hname{i}")).collect();
-        for ((template_id, stats, display), handle) in items.iter().zip(&handles) {
+        for (item, handle) in items.iter().zip(&handles) {
             templates = templates.child(template(
-                template_id,
-                stats,
-                &[("Type", "item"), ("Stats", stats), ("DisplayName", handle)],
+                item.template,
+                item.stats,
+                &[
+                    ("Type", "item"),
+                    ("Stats", item.stats),
+                    ("DisplayName", handle),
+                ],
             ));
-            objects.push_str(&format!(
-                "new entry \"{stats}\"\ntype \"Object\"\ndata \"RootTemplate\" \"{template_id}\"\n\n"
+            let (file, category_key) = match item.kind {
+                Kind::Weapon => ("Weapon", ""),
+                Kind::Armor => ("Armor", "Slot"),
+                _ => ("Object", "ObjectCategory"),
+            };
+            let entry = stats_files.entry(file).or_default();
+            entry.push_str(&format!(
+                "new entry \"{}\"\ntype \"{file}\"\ndata \"RootTemplate\" \"{}\"\n",
+                item.stats, item.template
             ));
-            texts.push((handle.as_str(), *display));
+            if !item.category.is_empty() && !category_key.is_empty() {
+                entry.push_str(&format!("data \"{category_key}\" \"{}\"\n", item.category));
+            }
+            entry.push('\n');
+            texts.push((handle.as_str(), item.display));
         }
         let templates = lsf(&[templates])?;
-        let shared = lspk::build(&[
-            ("Public/Shared/RootTemplates/_merged.lsf", &templates),
-            (
-                "Public/Shared/Stats/Generated/Data/Object.txt",
-                objects.as_bytes(),
-            ),
-        ])?;
-        std::fs::write(data.join("Shared.pak"), shared)?;
+        let names: Vec<String> = stats_files
+            .keys()
+            .map(|file| format!("Public/Shared/Stats/Generated/Data/{file}.txt"))
+            .collect();
+        let mut files: Vec<(&str, &[u8])> =
+            vec![("Public/Shared/RootTemplates/_merged.lsf", &templates)];
+        for (name, file) in names.iter().zip(stats_files.keys()) {
+            files.push((name, stats_files[file].as_bytes()));
+        }
+        std::fs::write(data.join("Shared.pak"), lspk::build(&files)?)?;
         let english = lspk::build(&[(LANGUAGE, &language(&texts))])?;
         std::fs::write(data.join("Localization").join("English.pak"), english)?;
         Ok(data)
@@ -675,6 +744,11 @@ mod tests {
             Some("Potion of Healing")
         );
         assert_eq!(catalog.display_name("unknown", "unknown"), None);
+        // One of each named item, by name, for adding.
+        let listed: Vec<&str> = catalog.listed().map(|i| i.display.as_str()).collect();
+        assert_eq!(listed, ["Dagger", "Potion of Healing"]);
+        let found: Vec<&str> = catalog.search("POTION").map(|i| i.stats.as_str()).collect();
+        assert_eq!(found, ["OBJ_Potion_Healing"]);
     }
 
     #[test]

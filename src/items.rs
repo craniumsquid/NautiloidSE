@@ -311,6 +311,29 @@ pub fn why_not_copied(entities: &NewAge, index: u32) -> Option<&'static str> {
     None
 }
 
+/// Why an item can't be the pattern a new item is copied from, if it can't: for a copy of
+/// the same item, and else for one made into another.
+pub fn why_not_pattern(globals: &Lsf, entities: &NewAge, item: Uuid) -> Option<&'static str> {
+    let index = entities.entity_index(item)?;
+    if let Some(reason) = why_not_copied(entities, index) {
+        return Some(reason);
+    }
+    if place(entities, index).is_err() {
+        return Some("its inventory doesn't list it");
+    }
+    if item_nodes(globals, item).is_err() {
+        return Some("it has no creator in the save");
+    }
+    None
+}
+
+/// Whether a copy of `item` can be made into another item: only one made from one of the
+/// game's own templates can.
+pub fn can_become_another(globals: &Lsf, item: Uuid) -> bool {
+    item_nodes(globals, item)
+        .is_ok_and(|(creator, _)| globals.get(creator, "TemplateType") == Some(Value::Byte(0)))
+}
+
 /// Copies an unstacked item that is in an inventory, into the same inventory. Returns the
 /// copy's entity.
 pub fn copy_item(globals: &mut Lsf, entities: &mut NewAge, item: Uuid) -> Result<Uuid> {
@@ -595,4 +618,82 @@ fn copy_nodes(globals: &mut Lsf, item: Uuid, copy: Uuid) -> Result<()> {
         globals.set_value(uuid, &Value::Uuid(new_uuid()))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::party::build::*;
+    use crate::party::{self, Holder};
+
+    fn hero_items(globals: &Lsf, entities: &NewAge) -> Vec<(String, String)> {
+        let party = party::read(globals, entities).unwrap();
+        let hero = party
+            .inventories
+            .iter()
+            .find(|i| i.holder == Holder::Character(0))
+            .unwrap();
+        hero.items
+            .iter()
+            .map(|i| (i.stats.clone(), i.template.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn copies_an_item_into_the_same_pack() {
+        let mut globals = sample_globals();
+        let mut entities = sample_entities();
+        let before = hero_items(&globals, &entities);
+        let copy = copy_item(&mut globals, &mut entities, uuid(ROPE)).unwrap();
+        entities.store(&mut globals).unwrap();
+        // Written out and read again, as an export does.
+        let globals = Lsf::parse(&globals.write().unwrap()).unwrap();
+        let entities = NewAge::from_lsf(&globals).unwrap();
+        let after = hero_items(&globals, &entities);
+        assert_eq!(after.len(), before.len() + 1);
+        let ropes = after.iter().filter(|(s, _)| s == "OBJ_Rope").count();
+        assert_eq!(ropes, 2);
+        let index = entities.entity_index(copy).unwrap();
+        assert_eq!(why_not_copied(&entities, index), None);
+        // It has a slot after the last, and the pack lists it.
+        let place = place(&entities, index).unwrap();
+        assert_eq!(
+            u32::from_le_bytes(place.member_data[8..12].try_into().unwrap()),
+            4
+        );
+    }
+
+    #[test]
+    fn a_copy_can_be_made_into_another_item() {
+        let mut globals = sample_globals();
+        let mut entities = sample_entities();
+        let template = "00000000-0000-0000-0000-00000000ffff";
+        copy_item_to(
+            &mut globals,
+            &mut entities,
+            uuid(ROPE),
+            template,
+            "OBJ_Rope_Silk",
+        )
+        .unwrap();
+        entities.store(&mut globals).unwrap();
+        let globals = Lsf::parse(&globals.write().unwrap()).unwrap();
+        let entities = NewAge::from_lsf(&globals).unwrap();
+        let after = hero_items(&globals, &entities);
+        assert!(after.contains(&("OBJ_Rope_Silk".to_owned(), template.to_owned())));
+        assert!(after.contains(&(
+            "OBJ_Rope".to_owned(),
+            "00000000-0000-0000-0000-00000000cccc".to_owned()
+        )));
+    }
+
+    #[test]
+    fn says_why_an_item_cant_be_copied() {
+        let entities = sample_entities();
+        let reason = |e: u32| why_not_copied(&entities, entities.entity_index(uuid(e)).unwrap());
+        assert_eq!(reason(ROPE), None);
+        assert!(reason(BAG).unwrap().contains("holds other items"));
+        assert!(reason(POTIONS).unwrap().contains("stack"));
+        assert!(reason(HERO).unwrap().contains("not an item"));
+    }
 }

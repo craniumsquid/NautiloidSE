@@ -1146,6 +1146,42 @@ pub mod build {
                 rows: vec![vec![0; 48]],
                 owners: Some(vec![CHEST]),
             },
+            // Each inventory's slot numbers and slot records, as the game keeps them.
+            TableSpec {
+                name: "game.inventory.v1.ContainerComponent",
+                row_len: 32,
+                rows: vec![vec![0; 32]; 5],
+                owners: Some(vec![
+                    HERO_PACK,
+                    BAG_INSIDE,
+                    TRADER_PACK,
+                    CAMPER_PACK,
+                    CHEST_INSIDE,
+                ]),
+            },
+            TableSpec {
+                name: "game.inventory.v0.ContainerSlotData",
+                row_len: 16,
+                rows: vec![vec![0; 16]; 8],
+                owners: None,
+            },
+            // In the order the inventories list them: the hero's pack holds four, the
+            // others one each.
+            TableSpec {
+                name: "test.v0.SlotNumbers",
+                row_len: 2,
+                rows: [0u16, 1, 2, 3, 0, 0, 0, 0]
+                    .iter()
+                    .map(|n| n.to_le_bytes().to_vec())
+                    .collect(),
+                owners: None,
+            },
+            TableSpec {
+                name: "test.v0.SlotRecords",
+                row_len: 8,
+                rows: vec![vec![0; 8]; 8],
+                owners: None,
+            },
             // Every item has an item component; owners in entity order, as the game keeps
             // them.
             TableSpec {
@@ -1237,9 +1273,57 @@ pub mod build {
             HERO_PACK,
             CHEST_INSIDE,
         ];
+        let members = [
+            HERO_GOLD,
+            BAG,
+            BAGGED_GOLD,
+            TRADER_GOLD,
+            ROPE,
+            CAMPER_GOLD,
+            POTIONS,
+            APPLES,
+        ];
+        // Slots counted per inventory, in the order the items are listed.
+        let mut slots: Vec<(u32, u32)> = Vec::new();
         for (row, pack) in packs.into_iter().enumerate() {
+            let slot = slots.iter().filter(|(p, _)| *p == pack).count() as u32;
+            slots.push((pack, slot));
             point(tables::MEMBER, row, 0, at(&fixed, tables::MEMBER_DATA, row));
             point(tables::MEMBER_DATA, row, 0, entity(&fixed, pack));
+            point(tables::MEMBER_DATA, row, 8, slot);
+        }
+        // Each inventory's lists: its items' slot numbers, and records naming the items.
+        let mut record = 0;
+        for (row, pack) in [
+            HERO_PACK,
+            BAG_INSIDE,
+            TRADER_PACK,
+            CAMPER_PACK,
+            CHEST_INSIDE,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let first = record;
+            for (member, (p, slot)) in members.iter().zip(&slots) {
+                if *p != pack {
+                    continue;
+                }
+                let records = "test.v0.SlotRecords";
+                let slot_data = "game.inventory.v0.ContainerSlotData";
+                point(records, record, 0, at(&fixed, slot_data, record));
+                point(slot_data, record, 0, entity(&fixed, *member));
+                point(slot_data, record, 8, *slot);
+                record += 1;
+            }
+            let numbers = at(&fixed, "test.v0.SlotNumbers", first);
+            let records = at(&fixed, "test.v0.SlotRecords", first);
+            let count = (record - first) as u32;
+            let container = "game.inventory.v1.ContainerComponent";
+            point(container, row, 0, numbers);
+            point(container, row, 8, numbers + count * 2);
+            point(container, row, 16, records);
+            point(container, row, 24, records + count * 8);
         }
         for (row, owner) in [HERO, BAG, TRADER, CAMPER, CHEST].into_iter().enumerate() {
             point(tables::INVENTORY_OWNER, row, 0, entity(&fixed, owner));

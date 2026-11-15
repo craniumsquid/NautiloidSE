@@ -6,7 +6,8 @@
 //! is always exactly what an export would write, and reverting one puts back exactly what
 //! was there.
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CatalogItem, Kind};
+use crate::items;
 use crate::lsf::Lsf;
 use crate::mods::{self, Module};
 use crate::newage::NewAge;
@@ -29,6 +30,8 @@ pub const MAX_GOLD: i32 = 9_999_999;
 pub const MAX_EXPERIENCE: i32 = 9_999_999;
 /// The most this editor will put in a stack of items. A limit of the editor, not the game.
 pub const MAX_AMOUNT: i32 = 9_999;
+/// The most of one item this editor will add at once.
+pub const MAX_ADDED: i32 = 20;
 
 /// One value that can be edited. Characters and gold stacks are named by position in the
 /// party as it was read.
@@ -48,6 +51,34 @@ pub enum Field {
     Approval(usize, usize),
     /// How many a stack of items holds: the inventory, then the item in it.
     Amount(usize, usize),
+    /// How many of an item to add, by its place in [`Session::additions`].
+    Add(usize),
+}
+
+/// An item to add.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Addition {
+    pub holder: party::Holder,
+    pub item: CatalogItem,
+    /// The item each new one is copied from: one the holder carries.
+    pub pattern: crate::value::Uuid,
+    /// Whether the pattern is the same item, so the new ones are plain copies.
+    pub same: bool,
+    count: u32,
+}
+
+/// An item a holder carries that new items can be copied from.
+#[derive(Clone, Debug)]
+struct Pattern {
+    holder: party::Holder,
+    entity: crate::value::Uuid,
+    stats: String,
+    kind: Kind,
+    category: String,
+    /// Not in a bag, so a new item goes straight into the holder's own inventory.
+    loose: bool,
+    /// Made from one of the game's own templates, so a copy can be made into another item.
+    root: bool,
 }
 
 /// One difference between the save as opened and as it now stands.
@@ -92,6 +123,10 @@ pub struct Session {
     active: Option<mods::Active>,
     /// The game's items, for the names players see, once read from the game's files.
     catalog: Option<Arc<Catalog>>,
+    /// What each holder carries that new items can be copied from, once the catalog is in.
+    patterns: Vec<Pattern>,
+    /// Items to add, in the order they were asked for.
+    additions: Vec<Addition>,
 }
 
 /// Finds each character's entry in the save's own summary, which is the only place the
@@ -158,6 +193,8 @@ fn field_of(party: &Party, field: Field) -> Option<i32> {
             .get(item)
             .filter(|item| item.stacked)
             .map(|item| signed(item.amount)),
+        // Kept by the session, not the party.
+        Field::Add(_) => None,
     }
 }
 
@@ -188,6 +225,7 @@ fn set_field(party: &mut Party, field: Field, value: i32) {
         }
         Field::Approval(..) => {}
         Field::Amount(inventory, item) => party.inventories[inventory].items[item].amount = value,
+        Field::Add(_) => {}
     }
 }
 
@@ -235,6 +273,8 @@ impl Session {
             mods,
             active,
             catalog: None,
+            patterns: Vec::new(),
+            additions: Vec::new(),
         })
     }
 
@@ -270,7 +310,132 @@ impl Session {
 
     /// Gives the session the game's items, for naming them as the game does.
     pub fn set_catalog(&mut self, catalog: Arc<Catalog>) {
+        let mut patterns = Vec::new();
+        for inventory in &self.original.inventories {
+            for item in &inventory.items {
+                if items::why_not_pattern(&self.globals, &self.entities, item.entity).is_some() {
+                    continue;
+                }
+                let known = catalog
+                    .by_template(&item.template)
+                    .or_else(|| catalog.by_stats(&item.stats));
+                patterns.push(Pattern {
+                    holder: inventory.holder,
+                    entity: item.entity,
+                    stats: item.stats.clone(),
+                    kind: known.map_or(Kind::Other, |k| k.kind),
+                    category: known.map(|k| k.category.clone()).unwrap_or_default(),
+                    loose: !item.in_container,
+                    root: items::can_become_another(&self.globals, item.entity),
+                });
+            }
+        }
+        // Items not in a bag first, so new items go into the holder's own inventory.
+        patterns.sort_by_key(|p| !p.loose);
+        self.patterns = patterns;
         self.catalog = Some(catalog);
+    }
+
+    /// The game's items, once read from the game's files.
+    pub fn catalog(&self) -> Option<&Catalog> {
+        self.catalog.as_deref()
+    }
+
+    /// What a new `item` for `holder` would be copied from, and whether that is the same item;
+    /// or why it can't be added.
+    pub fn pattern_for(
+        &self,
+        holder: party::Holder,
+        item: &CatalogItem,
+    ) -> Result<(crate::value::Uuid, bool), String> {
+        let who = self.holder_name(holder);
+        let held: Vec<&Pattern> = self
+            .patterns
+            .iter()
+            .filter(|p| p.holder == holder)
+            .collect();
+        if let Some(same) = held.iter().find(|p| p.stats == item.stats) {
+            return Ok((same.entity, true));
+        }
+        let potion = |category: &str| category.starts_with("Potion");
+        let (fits, needs): (Box<dyn Fn(&Pattern) -> bool>, String) = match item.kind {
+            _ if item.category.contains("MagicScroll") => {
+                return Err(format!(
+                    "A scroll keeps its spell with it, so {who} needs to carry one of these \
+                     already to copy."
+                ))
+            }
+            Kind::Weapon => (Box::new(|p| p.kind == Kind::Weapon), "a weapon".to_owned()),
+            Kind::Armor if !item.category.is_empty() => (
+                Box::new(|p| p.kind == Kind::Armor && p.category == item.category),
+                format!("something else worn as {}", item.category.to_lowercase()),
+            ),
+            Kind::Object if potion(&item.category) => (
+                Box::new(move |p| potion(&p.category)),
+                "a potion".to_owned(),
+            ),
+            Kind::Object if !item.category.is_empty() => (
+                Box::new(|p| p.category == item.category),
+                "something of the same kind".to_owned(),
+            ),
+            _ => {
+                return Err(format!(
+                    "{who} needs to carry one of these already: there is nothing like it to \
+                     make one from."
+                ))
+            }
+        };
+        held.iter()
+            .find(|p| p.root && fits(p))
+            .map(|p| (p.entity, false))
+            .ok_or_else(|| {
+                format!("{who} needs to carry {needs} to make it from, not worn or equipped.")
+            })
+    }
+
+    /// Items to add, in the order they were asked for. How many of each is [`Field::Add`].
+    pub fn additions(&self) -> &[Addition] {
+        &self.additions
+    }
+
+    /// Adds one more of the item called `stats` for `holder`. Returns its place in
+    /// [`Session::additions`], or why it can't be added.
+    pub fn add_item(
+        &mut self,
+        holder: party::Holder,
+        stats: &str,
+        time: f64,
+    ) -> Result<usize, String> {
+        let item = self
+            .catalog
+            .as_ref()
+            .and_then(|c| c.by_stats(stats))
+            .cloned()
+            .ok_or_else(|| "The game's files have no such item.".to_owned())?;
+        let index = match self
+            .additions
+            .iter()
+            .position(|a| a.holder == holder && a.item.stats == item.stats)
+        {
+            Some(index) => index,
+            None => {
+                let (pattern, same) = self.pattern_for(holder, &item)?;
+                self.additions.push(Addition {
+                    holder,
+                    item,
+                    pattern,
+                    same,
+                    count: 0,
+                });
+                self.additions.len() - 1
+            }
+        };
+        let field = Field::Add(index);
+        let now = self.value(field).unwrap_or(0);
+        self.last_edit = None;
+        self.set(field, now + 1, time);
+        self.last_edit = None;
+        Ok(index)
     }
 
     /// Whether items are named as the game names them.
@@ -302,12 +467,26 @@ impl Session {
     /// The field's value now, or `None` if this save has no such field (a character with no
     /// character creation record has no allocations; a new game has no Inspiration).
     pub fn value(&self, field: Field) -> Option<i32> {
-        field_of(&self.current, field)
+        match field {
+            Field::Add(i) => self.additions.get(i).map(|a| a.count as i32),
+            _ => field_of(&self.current, field),
+        }
     }
 
     /// The field's value in the save as opened.
     pub fn original_value(&self, field: Field) -> Option<i32> {
-        field_of(&self.original, field)
+        match field {
+            Field::Add(i) => (i < self.additions.len()).then_some(0),
+            _ => field_of(&self.original, field),
+        }
+    }
+
+    /// Changes a field without recording a step.
+    fn apply(&mut self, field: Field, value: i32) {
+        match field {
+            Field::Add(i) => self.additions[i].count = value.max(0) as u32,
+            _ => set_field(&mut self.current, field, value),
+        }
     }
 
     pub fn is_changed(&self, field: Field) -> bool {
@@ -332,6 +511,7 @@ impl Session {
             }
             // A stack the save already has above the editor's limit keeps its room.
             Field::Amount(..) => 1..=MAX_AMOUNT.max(self.original_value(field).unwrap_or(1)),
+            Field::Add(_) => 0..=MAX_ADDED,
         }
     }
 
@@ -346,7 +526,7 @@ impl Session {
         if value == before {
             return;
         }
-        set_field(&mut self.current, field, value);
+        self.apply(field, value);
         self.redo.clear();
         let merges = self
             .last_edit
@@ -397,7 +577,7 @@ impl Session {
     /// Undoes the last step and returns the field it was to.
     pub fn undo(&mut self) -> Option<Field> {
         let step = self.undo.pop()?;
-        set_field(&mut self.current, step.field, step.before);
+        self.apply(step.field, step.before);
         self.redo.push(step);
         self.last_edit = None;
         Some(step.field)
@@ -406,7 +586,7 @@ impl Session {
     /// Redoes the last step undone and returns the field it was to.
     pub fn redo(&mut self) -> Option<Field> {
         let step = self.redo.pop()?;
-        set_field(&mut self.current, step.field, step.after);
+        self.apply(step.field, step.after);
         self.undo.push(step);
         self.last_edit = None;
         Some(step.field)
@@ -435,6 +615,7 @@ impl Session {
                 .filter(|(_, item)| item.stacked);
             fields.extend(stacked.map(|(item, _)| Field::Amount(i, item)));
         }
+        fields.extend((0..self.additions.len()).map(Field::Add));
         fields
     }
 
@@ -491,6 +672,21 @@ impl Session {
                     .map_or_else(String::new, |item| self.item_name(item));
                 (who, what)
             }
+            Field::Add(i) => match self.additions.get(i) {
+                Some(addition) => (
+                    self.holder_name(addition.holder),
+                    format!("Add {}", self.catalog_name(&addition.item)),
+                ),
+                None => (String::new(), String::new()),
+            },
+        }
+    }
+
+    /// A catalog item's name: the one players see, else its game name made readable.
+    pub fn catalog_name(&self, item: &CatalogItem) -> String {
+        match item.display.is_empty() {
+            true => tidy(&item.stats),
+            false => item.display.clone(),
         }
     }
 
@@ -535,7 +731,7 @@ impl Session {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.current != self.original
+        self.current != self.original || self.additions.iter().any(|a| a.count > 0)
     }
 
     /// The folder exports go to unless told otherwise: the one the opened save is in.
@@ -596,6 +792,8 @@ impl Session {
                     self.original.inventories[inventory].items[item].entity,
                     count?,
                 )?,
+                // Added at export, with the node tree.
+                Field::Add(_) => {}
                 Field::Approval(c, which) => party::set_approval(
                     &mut entities,
                     character(c).entity,
@@ -611,8 +809,27 @@ impl Session {
     /// the new folder. The save that was opened is not touched. The result is read back and
     /// checked before this returns; if it does not hold what was asked for, it is removed.
     pub fn export(&self, parent: &Path, name: &str) -> Result<PathBuf> {
-        let entities = self.edited_entities()?;
+        let mut entities = self.edited_entities()?;
         let mut globals = self.globals.clone();
+        // New items: each a copy of its pattern, made into the item asked for unless it is
+        // the same one.
+        let mut added: Vec<(party::Holder, crate::value::Uuid, String)> = Vec::new();
+        for addition in self.additions.iter().filter(|a| a.count > 0) {
+            for _ in 0..addition.count {
+                let item = &addition.item;
+                let copy = match addition.same {
+                    true => items::copy_item(&mut globals, &mut entities, addition.pattern)?,
+                    false => items::copy_item_to(
+                        &mut globals,
+                        &mut entities,
+                        addition.pattern,
+                        &item.template,
+                        &item.stats,
+                    )?,
+                };
+                added.push((addition.holder, copy, item.stats.clone()));
+            }
+        }
         entities.store(&mut globals)?;
         let mut package = self.save.package.clone();
         package.replace(save::GLOBALS, &globals.write()?)?;
@@ -621,7 +838,27 @@ impl Session {
         let check = || -> Result<()> {
             let written = Save::open(&folder)?;
             let globals = written.lsf(save::GLOBALS)?;
-            let party = party::read(&globals, &NewAge::from_lsf(&globals)?)?;
+            let mut party = party::read(&globals, &NewAge::from_lsf(&globals)?)?;
+            // Every new item is where it was asked for, as the item asked for.
+            for (holder, entity, stats) in &added {
+                let found = party
+                    .inventories
+                    .iter()
+                    .filter(|i| i.holder == *holder)
+                    .flat_map(|i| &i.items)
+                    .find(|i| i.entity == *entity);
+                ensure!(
+                    found.is_some_and(|i| &i.stats == stats),
+                    "an added item is not where it should be"
+                );
+            }
+            // And apart from them, the party is as it was edited.
+            for inventory in &mut party.inventories {
+                inventory
+                    .items
+                    .retain(|i| !added.iter().any(|(_, entity, _)| *entity == i.entity));
+            }
+            party.inventories.retain(|i| !i.items.is_empty());
             ensure!(
                 same_party(&party, &self.current),
                 "the exported save does not hold the changes"
@@ -1000,6 +1237,109 @@ mod tests {
         assert_eq!(names, ["GustavX", "Faerun Colors", "Better UI"]);
         assert!(session.mods()[0].base && !session.mods()[1].base);
         assert!(session.active_mods().is_none(), "not in the game's folders");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A catalog of the sample's rope, a rope it has nowhere, a weapon and a scroll.
+    fn sample_catalog(dir: &Path) -> Arc<Catalog> {
+        use crate::catalog::build::{game_folder_with, GameItem};
+        let item = |template, stats, display, kind, category| GameItem {
+            template,
+            stats,
+            display,
+            kind,
+            category,
+        };
+        let data = game_folder_with(
+            &dir.join("game"),
+            &[
+                item(
+                    "00000000-0000-0000-0000-00000000cccc",
+                    "OBJ_Rope",
+                    "Rope",
+                    Kind::Object,
+                    "Tool",
+                ),
+                item(
+                    "00000000-0000-0000-0000-00000000ffff",
+                    "OBJ_Rope_Silk",
+                    "Silk Rope",
+                    Kind::Object,
+                    "Tool",
+                ),
+                item(
+                    "00000000-0000-0000-0000-000000001111",
+                    "WPN_Longsword_1",
+                    "Longsword +1",
+                    Kind::Weapon,
+                    "",
+                ),
+                item(
+                    "00000000-0000-0000-0000-000000002222",
+                    "OBJ_Scroll_Fireball",
+                    "Scroll of Fireball",
+                    Kind::Object,
+                    "MagicScroll_3",
+                ),
+            ],
+        )
+        .unwrap();
+        Arc::new(Catalog::from_game(&data).unwrap())
+    }
+
+    #[test]
+    fn adds_items_copied_from_what_the_holder_carries() {
+        use party::Holder;
+        let dir = temp_dir("add");
+        let mut session = open(&dir);
+        session.set_catalog(sample_catalog(&dir));
+        let hero = Holder::Character(0);
+
+        // The same item: a plain copy of the rope.
+        let rope = session.add_item(hero, "OBJ_Rope", 0.0).unwrap();
+        assert!(session.additions()[rope].same);
+        // Another of the same kind, made from the rope.
+        let silk = session.add_item(hero, "OBJ_Rope_Silk", 10.0).unwrap();
+        assert!(!session.additions()[silk].same);
+        // Nothing to make these from.
+        let weapon = session.add_item(hero, "WPN_Longsword_1", 20.0).unwrap_err();
+        assert!(weapon.contains("a weapon"), "{weapon}");
+        let scroll = session
+            .add_item(hero, "OBJ_Scroll_Fireball", 30.0)
+            .unwrap_err();
+        assert!(scroll.contains("scroll"), "{scroll}");
+        // The camp chest carries no rope.
+        assert!(session
+            .add_item(Holder::CampChest, "OBJ_Rope", 40.0)
+            .is_err());
+
+        // Asking again adds one more; each is a change that can be undone.
+        assert_eq!(session.add_item(hero, "OBJ_Rope", 50.0).unwrap(), rope);
+        assert_eq!(session.value(Field::Add(rope)), Some(2));
+        let whats: Vec<String> = session.changes().iter().map(|c| c.what.clone()).collect();
+        assert_eq!(whats, ["Add Rope", "Add Silk Rope"]);
+        session.undo();
+        assert_eq!(session.value(Field::Add(rope)), Some(1));
+        assert!(session.is_dirty());
+
+        let exported = session.export(&dir, "With more rope").unwrap();
+        let reopened = Session::open(&exported).unwrap();
+        let hero_items: Vec<String> = reopened
+            .original()
+            .inventories
+            .iter()
+            .find(|i| i.holder == hero)
+            .unwrap()
+            .items
+            .iter()
+            .map(|i| i.stats.clone())
+            .collect();
+        assert_eq!(hero_items.iter().filter(|s| *s == "OBJ_Rope").count(), 2);
+        assert_eq!(
+            hero_items.iter().filter(|s| *s == "OBJ_Rope_Silk").count(),
+            1
+        );
+        assert_eq!(reopened.party().characters, session.party().characters);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
