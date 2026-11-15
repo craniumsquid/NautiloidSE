@@ -35,7 +35,24 @@ A <save> is a .lsv file or the save folder that holds one.
       Inspiration.
   items <save> [--game FOLDER]
       What each character and the camp chest hold, with the amount of each stack and the
-      camp supplies food is worth.
+      camp supplies food is worth. With the game's files, the names players see.
+  add <save> <folder> <name> <holder> <item>[*N]... --game FOLDER
+      Add items as the app does, and export: <holder> is a character's name or \"chest\",
+      each <item> the game's name for it (OBJ_Potion_Healing), *N for more than one.
+  donors <save> [--game FOLDER] [--tables] [--kind KIND]
+      Research: every item in the save's item factory, counted by kind and by where it is
+      (the party's, someone else's, nowhere) and whether it is equipped, stacked or a story
+      item. --tables shows which component tables each kind of item has; --kind lists the
+      items of one kind (Weapon, Armour, Object).
+  owners <save>
+      Research: who each of the party's items belongs to by its ownership rows, and how long
+      each character's lists of what they own are.
+  pointers <save> <table>
+      Research: every eight bytes in the entity data that read as an offset of one of the
+      table's records, counted by the table and field they are in.
+  pointer-check <save>...
+      For each table of records the editor adds to, whether anything it doesn't know about
+      points into it.
   edit <save> <folder> <name> [--xp WHO=N,...] [--level-up WHO,...]
        [--ability WHO:ABILITY=POINTS,...] [--gold WHO=N,...] [--inspiration N]
        [--approval WHO=N,...]
@@ -68,6 +85,9 @@ A <save> is a .lsv file or the save folder that holds one.
       copy-as ITEM LIKE (a copy given LIKE's template and game name in the tree only);
       copy-as-template ITEM LIKE (the same, and LIKE's template and visual rows);
       copy-to ITEM STATS --game FOLDER (a copy made into the game's item called STATS);
+      add DONOR HOLDER [--as STATS] [--amount N] [--spell] [--no-spellbook] --game FOLDER
+      (a copy of DONOR, from anywhere, in HOLDER's main inventory: made into STATS, as a
+      stack of N, given a spell record of its own, or without its spell rows);
       checks that change nothing a player would see: entity-list (the entity list moved),
       move-table [WHO] (the experience table moved, a party member's experience +100),
       loose-member ITEM, loose-slot-record ITEM, loose-reference ITEM (one of the item's

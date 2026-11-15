@@ -55,6 +55,8 @@ Saves from before Patch 8 are listed but can't be edited.
 
 - [SCOPE.md](SCOPE.md): what the editor will and won't do, the build order and where it stands.
 - [docs/FORMAT.md](docs/FORMAT.md): what is known about the save format.
+- [docs/TECHNICAL.md](docs/TECHNICAL.md): how the editor works, for anyone forking or
+  extending it.
 
 ## Getting it
 
@@ -103,8 +105,9 @@ the folder that holds one.
 cargo run --release --bin nautiloid-cli -- info "path/to/save folder"
 ```
 
-Run it without arguments for the other commands: `list`, `dump`, `find`, `diff`, `party`,
-`edit`, `tables`, `rows`, `check`, `extract`, `rewrite` and `set`.
+Run it without arguments for the other commands, among them `list`, `dump`, `find`, `diff`,
+`party`, `items`, `edit`, `add`, `tables`, `rows`, `entity`, `pointer-check` and `catalog`.
+[docs/TECHNICAL.md](docs/TECHNICAL.md) says what each is for.
 
 ## Tests
 

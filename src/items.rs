@@ -1,4 +1,6 @@
-//! Adding items to a save. **Research**: nothing here has been tried in the game yet.
+//! Adding items to a save. Every new item is a copy of one already in the save, made into
+//! the item asked for; each way of doing it here has been tried in the game (see
+//! `docs/FORMAT.md` and `docs/TECHNICAL.md`), except where a function says it is research.
 //!
 //! An item is an entity: a `Creator` and an `Item` node in `Globals.lsf`'s item factory
 //! (in the same position in both lists), an entry in the entity data's entity list, and a
