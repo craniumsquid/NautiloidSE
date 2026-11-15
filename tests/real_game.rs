@@ -178,7 +178,7 @@ fn items_can_be_added_to_the_saves() {
                 );
             }
         }
-        // Scrolls given another spell cast it.
+        // Scrolls given another spell have none of their own: the game fills it in.
         let globals = reopened
             .save()
             .lsf(nautiloid_save_editor::save::GLOBALS)
@@ -189,7 +189,7 @@ fn items_can_be_added_to_the_saves() {
                 if !known.spell.is_empty() && !before.contains(&item.stats) {
                     assert_eq!(
                         nautiloid_save_editor::items::spell_of(&entities, item.entity),
-                        Some(known.spell.clone()),
+                        None,
                         "{}: {}",
                         entry.path().display(),
                         item.stats

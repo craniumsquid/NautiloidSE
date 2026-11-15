@@ -218,6 +218,7 @@ fn run(raw: &[String]) -> Result<()> {
             }
             Ok(())
         }
+        "add" => add(&Args::parse(rest, &[], &["game"])?, out),
         "donors" => donors(&Args::parse(rest, &["tables"], &["game", "kind"])?, out),
         "tables" => tables(&Args::parse(rest, &[], &[])?, out),
         "rows" => rows(&Args::parse(rest, &[], &["limit"])?, out),
@@ -791,6 +792,7 @@ fn edit(args: &Args, out: &mut impl Write) -> Result<()> {
     entities.store(&mut globals)?;
     let mut package = save.package.clone();
     package.replace(save::GLOBALS, &globals.write()?)?;
+    save::as_manual_save(&mut package)?;
     let folder = save::export_copy(
         &save,
         &package,
@@ -937,6 +939,56 @@ fn items(args: &Args, out: &mut impl Write) -> Result<()> {
     if let Some(total) = party.camp_supplies {
         writeln!(out, "camp supplies as stored: {total}")?;
     }
+    Ok(())
+}
+
+/// Adds items as the app does, and exports: `add <save> <folder> <name> <holder>
+/// <item>[*N]...`, the holder a character's name or "chest", each item by its game name.
+fn add(args: &Args, out: &mut impl Write) -> Result<()> {
+    use nautiloid_save_editor::session::Session;
+    ensure!(
+        args.positional.len() >= 5,
+        "usage: nautiloid-cli add <save> <folder> <name> <holder> <item>[*N]... --game FOLDER"
+    );
+    let folder = Path::new(
+        args.get("game")
+            .ok_or_else(|| anyhow!("add needs --game"))?,
+    );
+    let catalog = match folder.join("Shared.pak").is_file() {
+        true => nautiloid_save_editor::catalog::Catalog::from_game(folder)?,
+        false => nautiloid_save_editor::catalog::Catalog::from_folder(folder)?,
+    };
+    let mut session = Session::open(Path::new(&args.positional[0]))?;
+    session.set_catalog(std::sync::Arc::new(catalog));
+    let holder = match args.positional[3].as_str() {
+        "chest" => party::Holder::CampChest,
+        name => party::Holder::Character(
+            session
+                .original()
+                .characters
+                .iter()
+                .position(|c| c.display_name() == name)
+                .ok_or_else(|| anyhow!("nobody called {name}"))?,
+        ),
+    };
+    let mut time = 0.0;
+    for wanted in &args.positional[4..] {
+        let (stats, count) = match wanted.split_once('*') {
+            Some((stats, n)) => (stats, n.parse::<u32>()?),
+            None => (wanted.as_str(), 1),
+        };
+        for _ in 0..count {
+            let index = session
+                .add_item(holder, stats, time)
+                .map_err(|e| anyhow!("{stats}: {e}"))?;
+            time += 10.0;
+            if session.added(holder, stats) == count {
+                writeln!(out, "{stats} x{count}: {}", session.addition_hint(index))?;
+            }
+        }
+    }
+    let written = session.export(Path::new(&args.positional[1]), &args.positional[2])?;
+    writeln!(out, "wrote {}", written.display())?;
     Ok(())
 }
 
@@ -1413,6 +1465,7 @@ fn experiment(args: &Args, out: &mut impl Write) -> Result<()> {
     entities.store(&mut globals)?;
     let mut package = save.package.clone();
     package.replace(save::GLOBALS, &globals.write()?)?;
+    save::as_manual_save(&mut package)?;
     let folder = save::export_copy(
         &save,
         &package,

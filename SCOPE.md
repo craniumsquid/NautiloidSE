@@ -77,14 +77,17 @@ character or the camp chest, up to 20 of each per export.
   slot, of the same kind, or any item; the holder's own before the party's, and the party's
   before anyone else's. An equipped, stacked or story item can be copied: the copy is none of
   those, and belongs to the holder (to nobody in the camp chest). Containers are not copied.
-- A scroll keeps its spell in records of its own. A scroll is made from another scroll, and
-  the copy is given a spell record of its own naming the new spell, which the catalog reads
-  from the scroll's template.
+- A scroll keeps its spell in records of its own. A scroll is made from another scroll if
+  the save has one, copied without those records, and the game fills the new spell in from
+  the template. Giving the copy a spell record of its own was tried and doesn't work: no
+  description, and it can't be cast.
 - An item that stacks (by the template's `maxStackAmount`) goes in as one stack of as many as
   asked for, up to what a stack holds. A single item's count can't be changed, so the
   Inventory tab puts a + beside it to add more.
 - Items the game marks as story items are offered with a warning that a quest may count on
   there being only one.
+- An exported quicksave or autosave is written as a manual save: the game showed eleven
+  test saves made from one autosave all alike in its load menu.
 - Before any table of records is moved to add to it, the editor checks the save for pointers
   into that table it doesn't know about, and refuses rather than leave them behind.
 - Not done: items from mods, whose names are in the mods' own files.
@@ -137,9 +140,14 @@ the game at the end of the inventory: plain copies of a scroll and other items, 
 made from others (a longsword +1 and a dagger +1 from daggers, the Cap of Wrath from a hat,
 the Adamantine Shield from a shield, potions from potions). Items added in the app loaded
 too: potions and a greatsword +2 made from what a character carried, and a mask in the camp
-chest. Being tried now: copies from NPCs (an equipped sword and suit of armour), items made
-from another kind (a spear from an oil, a helmet from a staff), new stacks, scrolls given
-another spell, and copies between a character and the camp chest.
+chest. Round 10, made by the command-line tool in the same ways the app uses, all loaded
+and worked: copies from NPCs (an equipped sword made into Phalar Aluve, worn scale mail into
+Adamantine Splint Armour, a stack of Potions of Speed), items made from another kind (a Spear
++1 from an oil, the Haste Helm from a quarterstaff), a new stack of ten healing potions, a
+Scroll of Lightning Bolt made from Burning Hands with its spell left for the game to fill
+in, an NPC's Scroll of Fireball, and copies from the camp chest to a character and back. A
+scroll given a spell record of its own did not work. Round 11 tries the app's own export
+for these, a scroll made from an oil, and exports from an autosave written as manual saves.
 
 Phase 0 is built and passes on all eleven sample saves:
 

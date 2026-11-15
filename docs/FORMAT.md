@@ -281,7 +281,9 @@ What adding an item would have to touch, from an unstacked scroll in a character
   stack has `NewStackComponent` (an offset to the record) and every item in it a
   `StackMemberComponent` (an offset to the stack item's identifier). A new stack is one
   record with one item and one entry.
-- **A scroll's spell.** `SpellBookComponent` is a pair of offsets to one 72-byte `SpellData`,
+- **A scroll's spell.** The game fills it in from the template for a scroll with no spell
+  book and no `InventoryItemDataPopulatedComponent`; a spell record made for it doesn't work.
+  `SpellBookComponent` is a pair of offsets to one 72-byte `SpellData`,
   whose first eight bytes point at a `SpellId` (an offset to a `MetaId`, then the spell's
   name as an offset and a length, as the template's `SkillID` names it); the `MetaId` holds
   the name it was first given and an offset to its source. Every scroll's `SpellData` holds
@@ -391,6 +393,12 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | The same, from a dagger to Dagger +1; from a hat to Cap of Wrath, which is unique; from a shield to Adamantine Shield; from a Potion of Speed to a Potion of Invisibility | Each loads and works as the new item, its special effects included. Each new item is at the end of the pack |
 | The second version's copy moved in the game to another character who had the same scroll, then saved by the game | The game merged them into one stack of 2 on that character, as it does for any two such scrolls, and its own save passes every check. Its identifier is gone, as a merged item's is |
 | Made in the app: two companions' approval 0 → 50; a companion at camp's Strength points 0 → 18; a stack of healing potions 1 → 21; a stack of fish in the camp chest, worth 4 camp supplies each, 2 → 14 | Loads. The character sheet shows approval as "High (50)". Camp supplies show 335, up from 287 by the 48 the twelve fish are worth. After the companion is swapped into the party and the game saves again, that save has approval at 50, the stacks at 21 and 14, the companion's Strength at 26 with the 18 points kept, and experience awarded to them to match the party |
+| An NPC's equipped longsword copied into the main character's pack and made into Phalar Aluve; another NPC's worn scale mail made into Adamantine Splint Armour | Each loads, in the pack, unequipped, and works |
+| The main character's Oil of Accuracy made into a Spear +1; their quarterstaff made into the Haste Helm | Each loads and works: an item can be made from another kind of item |
+| A stack of healing potions copied as a new stack of 10; an NPC's Potion of Speed copied as a new stack of 4 | Loads, as one stack of 10 (drinking one leaves 9) and one of 4 |
+| A Scroll of Burning Hands made into a Scroll of Lightning Bolt with a spell record of its own naming the spell | Loads, but with no description, and it can't be cast |
+| The same, but copied without its spell book and its "data populated" mark | Loads and works: the game fills the spell in from the template |
+| Clothes from the camp chest copied to the main character; a quarterstaff of theirs copied into the camp chest; an NPC's Scroll of Fireball copied to the main character | Each loads and works |
 
 Every failure looks the same: the save loads to 100%, drops to the title screen, and shows
 "Server shutting down". Other saves load normally afterwards.

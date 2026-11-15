@@ -62,8 +62,11 @@ pub struct Plan {
     pub donor: crate::value::Uuid,
     /// Whether the donor is the same item, so a copy needs no making into it.
     pub same: bool,
-    /// For a scroll made from another: the spell to give it.
+    /// For a scroll made from another item: the spell it will cast. The copy leaves out the
+    /// donor's spell, and the game fills this one in from the template.
     pub spell: Option<String>,
+    /// Why this way of making the item hasn't been tried in the game yet, if it hasn't.
+    pub untried: Option<&'static str>,
 }
 
 /// An item to add.
@@ -352,7 +355,8 @@ impl Session {
             Some(_) => 1,
             None => 2,
         };
-        let scroll = !item.spell.is_empty() || item.category.contains("MagicScroll");
+        let is_scroll = |category: &str| category.contains("MagicScroll");
+        let scroll = !item.spell.is_empty() || is_scroll(&item.category);
         let rank = |source: &Source| -> Option<(u8, u8, u8)> {
             let donor = &source.donor;
             let what = if donor.stats == item.stats {
@@ -360,9 +364,13 @@ impl Session {
             } else if !donor.root {
                 return None;
             } else if scroll {
-                // A scroll's spell is in records of its own, which only a scroll has.
-                donor.spell.as_ref()?;
-                1
+                // A scroll's spell is in records of its own, which only a scroll has; the game
+                // fills them in for a copy that leaves them out.
+                match (is_scroll(&source.category), &donor.spell) {
+                    (true, Some(_)) => 1,
+                    (false, Some(_)) => 2,
+                    (_, None) => 3,
+                }
             } else if donor.spell.is_some() {
                 return None;
             } else if source.kind == item.kind && source.category == item.category {
@@ -381,19 +389,16 @@ impl Session {
             .min_by_key(|(rank, _)| *rank)
             .map(|(_, source)| source);
         let Some(source) = best else {
-            return Err(match scroll {
-                true => "There is no scroll anywhere in this save to make one from.".to_owned(),
-                false => "There is nothing in this save to make one from.".to_owned(),
-            });
+            return Err("There is nothing in this save to make one from.".to_owned());
         };
         let same = source.donor.stats == item.stats;
-        if scroll && !same && item.spell.is_empty() {
-            return Err("The game's files don't say which spell this scroll casts.".to_owned());
-        }
+        let spell = (!same && scroll).then(|| item.spell.clone());
         Ok(Plan {
             donor: source.donor.entity,
             same,
-            spell: (!same && scroll).then(|| item.spell.clone()),
+            untried: (spell.is_some() && source.donor.spell.is_none())
+                .then_some("a scroll made from something that isn't one"),
+            spell,
         })
     }
 
@@ -474,14 +479,21 @@ impl Session {
                             .unwrap_or_else(|| tidy(&s.donor.stats))
                     })
                     .unwrap_or_default();
-                format!("Made from a {name} {place}")
+                let article = match name.chars().next().map(|c| c.to_ascii_lowercase()) {
+                    Some('a' | 'e' | 'i' | 'o' | 'u') => "an",
+                    _ => "a",
+                };
+                format!("Made from {article} {name} {place}")
             }
         };
         if addition.plan.spell.is_some() {
-            hint.push_str(", given this scroll's spell");
+            hint.push_str(", the game giving it this scroll's spell");
         }
         if addition.stacked {
             hint.push_str(", as one stack");
+        }
+        if addition.plan.untried.is_some() {
+            hint.push_str(" (not yet tried in the game)");
         }
         hint
     }
@@ -912,7 +924,19 @@ impl Session {
             let item = &addition.item;
             for _ in 0..copies {
                 let plan = &addition.plan;
-                let copy = items::copy_into(&mut globals, &mut entities, plan.donor, &to, amount)?;
+                // A scroll given another spell leaves the donor's out, for the game to fill in.
+                let without: &[&str] = match plan.spell {
+                    Some(_) => &items::SPELL_ROWS,
+                    None => &[],
+                };
+                let copy = items::copy_into_without(
+                    &mut globals,
+                    &mut entities,
+                    plan.donor,
+                    &to,
+                    amount,
+                    without,
+                )?;
                 if !plan.same {
                     items::make_into(
                         &mut globals,
@@ -921,9 +945,6 @@ impl Session {
                         &item.template,
                         &item.stats,
                     )?;
-                }
-                if let Some(spell) = &plan.spell {
-                    items::set_spell(&mut entities, copy, spell)?;
                 }
                 added.push((
                     addition.holder,
@@ -936,6 +957,8 @@ impl Session {
         entities.store(&mut globals)?;
         let mut package = self.save.package.clone();
         package.replace(save::GLOBALS, &globals.write()?)?;
+        // An export is the player's own save, shown by its name.
+        let made_manual = save::as_manual_save(&mut package)?;
         let folder = save::export_copy(&self.save, &package, parent, name)?;
 
         let check = || -> Result<()> {
@@ -966,8 +989,16 @@ impl Session {
                 same_party(&party, &self.current),
                 "the exported save does not hold the changes"
             );
+            if made_manual {
+                ensure!(
+                    save::save_type(&written.package)? == Some(0),
+                    "the exported save is not a manual save"
+                );
+            }
             for entry in self.save.package.entries() {
-                if entry.name() != save::GLOBALS {
+                let changed =
+                    entry.name() == save::GLOBALS || (made_manual && entry.name() == save::META);
+                if !changed {
                     ensure!(
                         self.save.package.unpack(entry)?
                             == written.package.read_file(entry.name())?,
@@ -1052,6 +1083,12 @@ pub mod build {
     /// Writes a save holding the sample party from [`party::build`] under `dir`.
     pub fn sample_save(dir: &Path, name: &str) -> Result<PathBuf> {
         let mut spec = SaveSpec::new("Tav", name);
+        // The game's own quicksaves and autosaves are named for what they are.
+        spec.save_type = match name {
+            n if n.starts_with("QuickSave_") => 1,
+            n if n.starts_with("AutoSave_") => 2,
+            _ => 0,
+        };
         spec.mods = vec!["Faerun Colors".to_owned(), "Better UI".to_owned()];
         spec.files = vec![
             (save::GLOBALS.to_owned(), party::build::globals_lsf()),
@@ -1420,11 +1457,13 @@ mod tests {
         assert!(session
             .addition_hint(sword)
             .starts_with("Made from a Longsword someone outside the party has"));
-        // There is no scroll anywhere to make a scroll from.
-        let scroll = session
-            .add_item(hero, "OBJ_Scroll_Fireball", 30.0)
-            .unwrap_err();
-        assert!(scroll.contains("scroll"), "{scroll}");
+        // There is no scroll anywhere, so a scroll is made from something else, which hasn't
+        // been tried in the game; its spell is left for the game to fill in.
+        let catalog = session.catalog().unwrap();
+        let fireball = catalog.by_stats("OBJ_Scroll_Fireball").unwrap().clone();
+        let plan = session.pattern_for(hero, &fireball).unwrap();
+        assert!(plan.untried.is_some());
+        assert_eq!(plan.donor, uuid(ROPE));
         // The camp chest gets a copy of the hero's rope.
         let chest_rope = session
             .add_item(Holder::CampChest, "OBJ_Rope", 40.0)
@@ -1468,6 +1507,26 @@ mod tests {
     }
 
     #[test]
+    fn exports_are_manual_saves_except_in_honour_mode() {
+        use crate::saves::build::{save_folder, SaveSpec};
+        let dir = temp_dir("types");
+        for (name, kind, after) in [("AutoSave_9", 2, 0), ("HonourMode", 3, 3), ("Mine", 0, 0)] {
+            let mut spec = SaveSpec::new("Tav", name);
+            spec.save_type = kind;
+            let folder = save_folder(&dir, &spec).unwrap();
+            let mut package = Save::open(&folder).unwrap().package.clone();
+            let changed = save::as_manual_save(&mut package).unwrap();
+            assert_eq!(changed, kind != after, "{name}");
+            assert_eq!(
+                save::save_type(&package).unwrap(),
+                Some(after as i64),
+                "{name}"
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn exports_a_new_save_and_leaves_the_original() {
         let dir = temp_dir("export");
         let folder = build::sample_save(&dir, "QuickSave_3").unwrap();
@@ -1485,6 +1544,10 @@ mod tests {
         assert_eq!(name, "QuickSave_3 - Edited");
         let exported = session.export(&dir, &name).unwrap();
         assert_eq!(exported, dir.join("Tav-1234__QuickSave_3 - Edited"));
+        // A quicksave exported is the player's own save, shown by its name.
+        assert_eq!(save::save_type(&session.save().package).unwrap(), Some(1));
+        let written = Save::open(&exported.join("QuickSave_3 - Edited.lsv")).unwrap();
+        assert_eq!(save::save_type(&written.package).unwrap(), Some(0));
         assert!(exported.join("QuickSave_3 - Edited.lsv").is_file());
         assert!(exported.join("QuickSave_3 - Edited.WebP").is_file());
         assert_eq!(

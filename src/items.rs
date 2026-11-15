@@ -80,6 +80,10 @@ const SPELL_ID: &str = "game.spell.v0.SpellId";
 /// Where a spell comes from, 24 bytes: the name it was first given as an offset and a
 /// length, then an offset to the source.
 const META_ID: &str = "game.spell.v0.MetaId";
+/// The rows a scroll made from another item is copied without, so that the game fills its
+/// spell in from its template when the save loads: the spell book, and the mark that says
+/// the item's data has been filled in already.
+pub const SPELL_ROWS: [&str; 2] = [SPELL_BOOK, "game.v0.InventoryItemDataPopulatedComponent"];
 /// What an offset holds when it points at nothing.
 const NONE: u64 = u64::MAX;
 
@@ -1000,9 +1004,10 @@ pub fn spell_of(entities: &NewAge, item: Uuid) -> Option<String> {
     String::from_utf8(name.to_vec()).ok()
 }
 
-/// Makes `item`, a copy of a scroll, cast `spell` instead, by the name the game gives the
-/// spell (`Projectile_Fireball`): the copy gets a spell record of its own naming the spell.
-/// Where the spell came from stays the donor's, as the game names that differently.
+/// Research, and no good: makes `item`, a copy of a scroll, cast `spell` instead, by the
+/// name the game gives the spell (`Projectile_Fireball`), with a spell record of its own
+/// naming the spell. In the game such a scroll has no description and can't be cast. A
+/// copy without [`SPELL_ROWS`] works instead: the game fills the spell in from the template.
 pub fn set_spell(entities: &mut NewAge, item: Uuid, spell: &str) -> Result<()> {
     let index = entities
         .entity_index(item)
