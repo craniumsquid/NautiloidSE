@@ -276,6 +276,13 @@ did moving just the scroll's records there. So the second version keeps them in:
   of the rows where it was are pointed at by nothing (about 2,200 of 2,300 in one sample).
   The copy's identifier goes in one of those.
 
+Checked on the four saves with the biggest inventories (Patch 4, 5 and 8, up to 1,272 items
+in one pack): every `MemberData` is pointed at from a `MemberComponent` row and every slot
+record from an inventory's list, most of the entity list is pointed at by nothing (2,500 to
+5,000 rows), and every owner list is sorted. Slot numbers have gaps in most inventories and
+the position counter runs well past the number of items, but no two items share a position,
+so the next slot and position after the highest are what the game would use.
+
 ## Tried in the game
 
 All on build `4.1.1.7631656`, with copies of one manual save.
