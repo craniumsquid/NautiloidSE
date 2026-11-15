@@ -884,32 +884,56 @@ pub mod build {
             .child(creator(COMPANION, "2c76687d-93a2-477b-8b18-8a14b549304c"))
             .child(creator(TRADER, "00000000-0000-0000-0000-00000000aaaa"))
             .child(creator(CAMPER, "ad9af97d-75da-406a-ae13-7071c563f604"));
-        let items = Node::new("Creators")
-            .child(creator(HERO_GOLD, GOLD_TEMPLATE))
-            .child(creator(BAGGED_GOLD, GOLD_TEMPLATE))
-            .child(creator(TRADER_GOLD, GOLD_TEMPLATE))
-            .child(creator(CAMPER_GOLD, GOLD_TEMPLATE))
-            .child(creator(BAG, "00000000-0000-0000-0000-00000000bbbb"))
-            .child(creator(ROPE, "00000000-0000-0000-0000-00000000cccc"))
-            .child(creator(POTIONS, "00000000-0000-0000-0000-00000000dddd"))
-            .child(creator(APPLES, "00000000-0000-0000-0000-00000000eeee"));
-        // The items themselves, in the creators' order, each with the game's name for it.
+        // Items as the game writes them: a creator with the template as a UUID and an
+        // identifier of its own, and an item node in the same position.
+        let item_creator = |entity: u32, template: &str| {
+            let template = Uuid::parse(template).expect("a sample template is a UUID");
+            Node::new("Creator")
+                .attr("Entity", DataType::Uuid, Value::Uuid(uuid(entity)))
+                .attr("TemplateType", DataType::Byte, Value::Byte(0))
+                .attr("TemplateID", DataType::Uuid, Value::Uuid(template))
+                .attr(
+                    "UUID",
+                    DataType::Uuid,
+                    Value::Uuid(Uuid([entity as u8 + 0x40; 16])),
+                )
+        };
+        let item_node = |template: &str, stats: &str| {
+            let template = Uuid::parse(template).expect("a sample template is a UUID");
+            Node::new("Item")
+                .attr("Level", DataType::FixedString, Value::Text(String::new()))
+                .attr("CurrentTemplate", DataType::Uuid, Value::Uuid(template))
+                .attr("CurrentTemplateType", DataType::Byte, Value::Byte(0))
+                .attr("Stats", DataType::FixedString, Value::Text(stats.into()))
+                .child(Node::new("ItemMachine"))
+        };
+        let sample_items = [
+            (HERO_GOLD, GOLD_TEMPLATE, "LOOT_Gold_A"),
+            (BAGGED_GOLD, GOLD_TEMPLATE, "LOOT_Gold_A"),
+            (TRADER_GOLD, GOLD_TEMPLATE, "LOOT_Gold_A"),
+            (CAMPER_GOLD, GOLD_TEMPLATE, "LOOT_Gold_A"),
+            (
+                BAG,
+                "00000000-0000-0000-0000-00000000bbbb",
+                "OBJ_Bag_AlchemyPouch",
+            ),
+            (ROPE, "00000000-0000-0000-0000-00000000cccc", "OBJ_Rope"),
+            (
+                POTIONS,
+                "00000000-0000-0000-0000-00000000dddd",
+                "OBJ_Potion_Healing",
+            ),
+            (
+                APPLES,
+                "00000000-0000-0000-0000-00000000eeee",
+                "CONS_FOOD_Fruit_Apple",
+            ),
+        ];
+        let mut items = Node::new("Creators");
         let mut item_list = Node::new("Items");
-        for stats in [
-            "LOOT_Gold_A",
-            "LOOT_Gold_A",
-            "LOOT_Gold_A",
-            "LOOT_Gold_A",
-            "OBJ_Bag_AlchemyPouch",
-            "OBJ_Rope",
-            "OBJ_Potion_Healing",
-            "CONS_FOOD_Fruit_Apple",
-        ] {
-            item_list = item_list.child(Node::new("Item").attr(
-                "Stats",
-                DataType::FixedString,
-                Value::Text(stats.into()),
-            ));
+        for (entity, template, stats) in sample_items {
+            items = items.child(item_creator(entity, template));
+            item_list = item_list.child(item_node(template, stats));
         }
         let entities = Node::new(crate::newage::NODE).attr(
             crate::newage::NODE,
