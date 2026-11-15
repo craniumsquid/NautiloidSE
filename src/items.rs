@@ -643,6 +643,64 @@ impl Destination {
     }
 }
 
+/// An item new items can be copied from, wherever it is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Donor {
+    pub entity: Uuid,
+    /// Its game name, as its item node gives it.
+    pub stats: String,
+    /// Made from one of the game's own templates, so a copy can be made into another item.
+    pub root: bool,
+    /// Neither equipped, stacked nor a story item, so nothing of it is left out of a copy.
+    pub plain: bool,
+    /// The spell it casts, for a scroll.
+    pub spell: Option<String>,
+}
+
+/// Every item in the save that new items can be copied from, in the item factory's order.
+pub fn donors(globals: &Lsf, entities: &NewAge) -> Vec<Donor> {
+    let (Some(creators), Some(nodes)) = (
+        globals.find(&["Items", "ItemFactory", "Creators"]),
+        globals.find(&["Items", "ItemFactory", "Items"]),
+    ) else {
+        return Vec::new();
+    };
+    let has = |name: &str, index: u32| {
+        entities
+            .table(name)
+            .is_some_and(|t| entities.row_of(t, index).is_some())
+    };
+    let mut out = Vec::new();
+    for (creator, node) in globals
+        .children_named(creators, "Creator")
+        .zip(globals.children_named(nodes, "Item"))
+    {
+        let Some(entity) = globals.get(creator, "Entity").and_then(|v| v.as_uuid()) else {
+            continue;
+        };
+        let Some(index) = entities.entity_index(entity) else {
+            continue;
+        };
+        if why_not_donor(entities, index).is_some() {
+            continue;
+        }
+        let stats = globals
+            .get(node, "Stats")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        out.push(Donor {
+            entity,
+            stats,
+            root: globals.get(creator, "TemplateType") == Some(Value::Byte(0)),
+            plain: ![WIELDING, STACKED, STACK_MEMBER, STORY]
+                .iter()
+                .any(|name| has(name, index)),
+            spell: spell_of(entities, entity),
+        });
+    }
+    out
+}
+
 /// Why an item can't be what a new item is copied from, wherever it is, if it can't.
 /// Unlike [`why_not_copied`], an equipped, stacked or story item can be: the copy is none of
 /// those.
@@ -796,11 +854,35 @@ pub fn copy_into_without(
 
     let copy = new_uuid();
     let copy_index = entities.add_entities(&[copy])?[0];
-    let mut wanted = vec![copy, to.inventory];
-    wanted.extend(to.owner);
-    let refs = add_references(entities, &wanted)?;
-    let (copy_ref, inventory_ref) = (refs[0], refs[1]);
-    let owner_ref = refs.get(2).copied().unwrap_or(NONE);
+    // The inventory and its owner are pointed at already; their references are shared, as
+    // the game's own copies of an item share them. The copy needs one of its own.
+    let existing = |index: u32| existing_reference(entities, index);
+    let inventory_ref = existing(inventory);
+    let owner_ref = owner.and_then(existing);
+    let mut wanted = vec![copy];
+    if inventory_ref.is_none() {
+        wanted.push(to.inventory);
+    }
+    if let (Some(owner), None) = (to.owner, owner_ref) {
+        wanted.push(owner);
+    }
+    let mut refs = add_references(entities, &wanted)?.into_iter();
+    let copy_ref = refs
+        .next()
+        .ok_or_else(|| anyhow!("no reference for the copy"))?;
+    let inventory_ref = match inventory_ref {
+        Some(at) => at,
+        None => refs
+            .next()
+            .ok_or_else(|| anyhow!("no reference for the inventory"))?,
+    };
+    let owner_ref = match (to.owner, owner_ref) {
+        (None, _) => NONE,
+        (Some(_), Some(at)) => at,
+        (Some(_), None) => refs
+            .next()
+            .ok_or_else(|| anyhow!("no reference for the owner"))?,
+    };
 
     // A slot in the inventory, after the last, and a position after the last.
     let (keys, values) = container_arrays(entities, container_row)?;
@@ -885,6 +967,23 @@ pub fn copy_into_without(
 
     copy_nodes(globals, donor, copy)?;
     Ok(copy)
+}
+
+/// Where an identifier of entity `index` already is, that something points at: the main
+/// inventory an owner of inventories names, or the owner an inventory names.
+fn existing_reference(entities: &NewAge, index: u32) -> Option<u64> {
+    for (name, at) in [(INVENTORIES, 16), (INVENTORY_OWNER, 0)] {
+        let Some(table) = entities.table(name) else {
+            continue;
+        };
+        for row in 0..entities.tables()[table].rows {
+            let pointer = u64_of(entities.row(table, row), at);
+            if pointer != NONE && entities.entity_at(pointer) == Some(index) {
+                return Some(pointer);
+            }
+        }
+    }
+    None
 }
 
 /// The spell `item` casts, if it casts one: a scroll's.

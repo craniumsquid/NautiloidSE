@@ -202,6 +202,7 @@ fn items_take_the_names_from_the_game_once_it_is_found() {
 fn adds_items_from_the_games_files() {
     use nautiloid_save_editor::catalog::build::{game_folder_with, GameItem};
     use nautiloid_save_editor::catalog::Kind;
+    use nautiloid_save_editor::party::Holder;
     use nautiloid_save_editor::session::Session;
     let (dir, mut ui) = open_sample("add-items");
     let item = |template, stats, display, kind, category| GameItem {
@@ -236,6 +237,13 @@ fn adds_items_from_the_games_files() {
                 Kind::Weapon,
                 "",
             ),
+            item(
+                "00000000-0000-0000-0000-000000005555",
+                "WPN_Longsword",
+                "Longsword",
+                Kind::Weapon,
+                "",
+            ),
         ],
     )
     .unwrap();
@@ -250,7 +258,7 @@ fn adds_items_from_the_games_files() {
 
     ui.click("Add items…");
     assert!(ui.sees("Add items for Tav"));
-    assert!(ui.sees("search the game's 3 items"));
+    assert!(ui.sees("search the game's 4 items"));
     ui.type_text("rope");
     assert!(ui.sees("Silk Rope"));
     assert!(ui.sees("Object · Tool · OBJ_Rope_Silk"));
@@ -262,20 +270,34 @@ fn adds_items_from_the_games_files() {
     assert!(ui.sees("1 added"));
     ui.snapshot("16-add-items");
 
-    // Nothing to make a sword from: the reason is given and there is no button.
+    // Nobody in the party has a weapon, but a sword can still be added: it is made from
+    // the one the trader has equipped.
     ui.press(egui::Key::A, egui::Modifiers::COMMAND);
     ui.type_text("long");
-    assert!(ui.sees("Tav needs to carry a weapon"));
-    assert!(ui.find_all("Add").is_empty());
+    assert!(ui.sees("Longsword +1"));
+    ui.click_nth("Add", 1);
+    assert!(ui.sees("1 added"));
     ui.type_text("zzz");
     assert!(ui.sees("No item in the game's files is called that."));
     ui.click("Done");
     assert!(ui.app.dialog().is_none());
 
     // What is to be added is listed, can be changed, and is on this tab's changes.
-    assert!(ui.sees("ADDING (2)"));
+    assert!(ui.sees("ADDING (3)"));
     assert!(ui.sees("A copy of the one Tav holds · OBJ_Rope"));
-    assert!(ui.sees("Made from Tav's Rope · OBJ_Rope_Silk"));
+    assert!(ui.sees("Made from a Rope Tav holds · OBJ_Rope_Silk"));
+    assert!(ui.sees("Made from a Longsword someone outside the party has · WPN_Longsword_1"));
+    // A single item says why its count can't change, and has a + to add more instead: the
+    // pluses are the three being added, the stack's, the bag's and the rope's.
+    assert!(ui.sees("the save keeps no count for these"));
+    ui.click_nth("+", 5);
+    assert_eq!(
+        ui.app
+            .session()
+            .unwrap()
+            .added(Holder::Character(0), "OBJ_Rope"),
+        3
+    );
     let whats: Vec<String> = ui
         .app
         .session()
@@ -284,7 +306,7 @@ fn adds_items_from_the_games_files() {
         .iter()
         .map(|c| c.what.clone())
         .collect();
-    assert_eq!(whats, ["Add Rope", "Add Silk Rope"]);
+    assert_eq!(whats, ["Add Rope", "Add Silk Rope", "Add Longsword +1"]);
     ui.snapshot("16b-adding");
 
     ui.click("Export as a new save…");
@@ -296,8 +318,9 @@ fn adds_items_from_the_games_files() {
         .iter()
         .map(|i| i.stats.as_str())
         .collect();
-    assert_eq!(tav.iter().filter(|s| **s == "OBJ_Rope").count(), 3);
+    assert_eq!(tav.iter().filter(|s| **s == "OBJ_Rope").count(), 4);
     assert_eq!(tav.iter().filter(|s| **s == "OBJ_Rope_Silk").count(), 1);
+    assert_eq!(tav.iter().filter(|s| **s == "WPN_Longsword_1").count(), 1);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

@@ -72,16 +72,22 @@ character or the camp chest, up to 20 of each per export.
 - The list of items is read from the player's own install of the game when the app starts:
   the root templates, the item stats and the English language file. Nothing from the game is
   shipped. The app finds a Steam install by itself, or asks for the game's folder.
-- A new item is a copy of one the holder already carries, made into the chosen item by its
-  template and stats. A weapon is made from a weapon, armour from armour worn in the same
-  slot, a potion from a potion and anything else from an item of the same category. Worn,
-  equipped, story and stacked items, and containers, are not copied.
-- A scroll keeps its spell in records of its own, so a scroll can only be a plain copy of one
-  the holder carries.
+- A new item is a copy of the closest item anywhere in the save, made into the chosen item by
+  its template and stats: the same item if anyone has one, then an item of the same kind and
+  slot, of the same kind, or any item; the holder's own before the party's, and the party's
+  before anyone else's. An equipped, stacked or story item can be copied: the copy is none of
+  those, and belongs to the holder (to nobody in the camp chest). Containers are not copied.
+- A scroll keeps its spell in records of its own. A scroll is made from another scroll, and
+  the copy is given a spell record of its own naming the new spell, which the catalog reads
+  from the scroll's template.
+- An item that stacks (by the template's `maxStackAmount`) goes in as one stack of as many as
+  asked for, up to what a stack holds. A single item's count can't be changed, so the
+  Inventory tab puts a + beside it to add more.
 - Items the game marks as story items are offered with a warning that a quest may count on
   there being only one.
-- Not done: items from mods, whose names are in the mods' own files; scrolls of spells the
-  holder doesn't carry; stacks, gold among them.
+- Before any table of records is moved to add to it, the editor checks the save for pointers
+  into that table it doesn't know about, and refuses rather than leave them behind.
+- Not done: items from mods, whose names are in the mods' own files.
 
 ### Stretch goal
 
@@ -129,8 +135,11 @@ With the Mods tab the four Phase 2 tabs are done, and Phase 3, adding items, is 
 Items added by the command-line tool, which adds them the same way the app does, loaded in
 the game at the end of the inventory: plain copies of a scroll and other items, and items
 made from others (a longsword +1 and a dagger +1 from daggers, the Cap of Wrath from a hat,
-the Adamantine Shield from a shield, potions from potions). Adding from the app itself has
-not been tried in the game yet.
+the Adamantine Shield from a shield, potions from potions). Items added in the app loaded
+too: potions and a greatsword +2 made from what a character carried, and a mask in the camp
+chest. Being tried now: copies from NPCs (an equipped sword and suit of armour), items made
+from another kind (a spear from an oil, a helmet from a staff), new stacks, scrolls given
+another spell, and copies between a character and the camp chest.
 
 Phase 0 is built and passes on all eleven sample saves:
 

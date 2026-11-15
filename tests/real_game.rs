@@ -98,47 +98,104 @@ fn items_can_be_added_to_the_saves() {
         };
         let holder = inventory.holder;
         let before: Vec<String> = inventory.items.iter().map(|i| i.stats.clone()).collect();
-        // One of each kind that can be made from something the holder carries, and a plain
-        // copy of something it carries.
-        let mut wanted: Vec<String> = Vec::new();
+        // One of each kind made from another item, a plain copy, a scroll given another
+        // spell, and a stack of five of something that stacks.
+        let mut wanted: Vec<(String, u32)> = Vec::new();
+        let mut take = |found: Option<&nautiloid_save_editor::catalog::CatalogItem>, n: u32| {
+            if let Some(item) = found {
+                if !wanted.iter().any(|(s, _)| *s == item.stats) {
+                    wanted.push((item.stats.clone(), n));
+                }
+            }
+        };
         for kind in [Kind::Weapon, Kind::Armor, Kind::Object] {
-            let made = catalog.listed().find(|item| {
-                item.kind == kind && matches!(session.pattern_for(holder, item), Ok((_, false)))
-            });
-            wanted.extend(made.map(|item| item.stats.clone()));
+            take(
+                catalog.listed().find(|item| {
+                    item.kind == kind
+                        && item.max_stack == 1
+                        && session.pattern_for(holder, item).is_ok_and(|p| !p.same)
+                }),
+                1,
+            );
         }
-        let copied = catalog
-            .listed()
-            .find(|item| matches!(session.pattern_for(holder, item), Ok((_, true))));
-        wanted.extend(copied.map(|item| item.stats.clone()));
-        if wanted.is_empty() {
-            continue;
-        }
-        for (time, stats) in wanted.iter().enumerate() {
-            session.add_item(holder, stats, time as f64 * 10.0).unwrap();
+        take(
+            catalog.listed().find(|item| {
+                item.max_stack == 1 && session.pattern_for(holder, item).is_ok_and(|p| p.same)
+            }),
+            1,
+        );
+        take(
+            catalog.listed().find(|item| {
+                session
+                    .pattern_for(holder, item)
+                    .is_ok_and(|p| p.spell.is_some())
+            }),
+            1,
+        );
+        take(
+            catalog.listed().find(|item| {
+                item.max_stack >= 5
+                    && item.spell.is_empty()
+                    && session.pattern_for(holder, item).is_ok()
+            }),
+            5,
+        );
+        assert!(
+            wanted.len() >= 5,
+            "{}: only {wanted:?}",
+            entry.path().display()
+        );
+        let mut time = 0.0;
+        for (stats, n) in &wanted {
+            for _ in 0..*n {
+                session.add_item(holder, stats, time).unwrap();
+                time += 10.0;
+            }
         }
         let exported = session
             .export(&out, &format!("Added {tried}"))
             .unwrap_or_else(|e| panic!("{}: {e:#}", entry.path().display()));
         let reopened = Session::open(&exported).unwrap();
-        let after: Vec<String> = reopened
+        let items = &reopened
             .original()
             .inventories
             .iter()
             .find(|i| i.holder == holder)
             .unwrap()
-            .items
-            .iter()
-            .map(|i| i.stats.clone())
-            .collect();
-        for stats in &wanted {
-            let count = |items: &[String]| items.iter().filter(|s| *s == stats).count();
-            assert_eq!(
-                count(&after),
-                count(&before) + 1,
-                "{}: {stats}",
-                entry.path().display()
-            );
+            .items;
+        for (stats, n) in &wanted {
+            let count = items.iter().filter(|i| i.stats == *stats).count();
+            let was = before.iter().filter(|s| *s == stats).count();
+            assert_eq!(count, was + 1, "{}: {stats}", entry.path().display());
+            // A stack is one new item holding them all.
+            if *n > 1 {
+                assert!(
+                    items
+                        .iter()
+                        .any(|i| i.stats == *stats && i.stacked && i.amount == *n),
+                    "{}: {stats} is not a stack of {n}",
+                    entry.path().display()
+                );
+            }
+        }
+        // Scrolls given another spell cast it.
+        let globals = reopened
+            .save()
+            .lsf(nautiloid_save_editor::save::GLOBALS)
+            .unwrap();
+        let entities = NewAge::from_lsf(&globals).unwrap();
+        for item in items {
+            if let Some(known) = catalog.by_stats(&item.stats) {
+                if !known.spell.is_empty() && !before.contains(&item.stats) {
+                    assert_eq!(
+                        nautiloid_save_editor::items::spell_of(&entities, item.entity),
+                        Some(known.spell.clone()),
+                        "{}: {}",
+                        entry.path().display(),
+                        item.stats
+                    );
+                }
+            }
         }
         tried += 1;
     }

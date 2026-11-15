@@ -763,19 +763,22 @@ pub mod build {
         record(LEVEL_TABLE, 32, 1, level_at);
         data.resize(level_at + 32, 0);
         let entities_at = data.len();
+        // After the list, the table holds references to entities, and rows nothing
+        // points at, as the game's does.
+        const SPARE: usize = 31;
         record(
             ENTITY_TABLE,
             16,
-            entities.len() + usize::from(!entities.is_empty()),
+            entities.len() + usize::from(!entities.is_empty()) * (1 + SPARE),
             entities_at,
         );
         for id in entities {
             data.extend_from_slice(id);
         }
         let entities_end = data.len();
-        // After the list, the table holds references to entities; repeat the first one.
         if let Some(first) = entities.first() {
             data.extend_from_slice(first);
+            data.extend(std::iter::repeat_n(0u8, SPARE * 16));
         }
         for table in tables {
             record(table.name, table.row_len, table.rows.len(), data.len());

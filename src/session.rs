@@ -55,33 +55,36 @@ pub enum Field {
     Add(usize),
 }
 
+/// How a new item is made: a copy of `donor`, an item anywhere in the save, made into the
+/// item asked for unless it is the same one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Plan {
+    pub donor: crate::value::Uuid,
+    /// Whether the donor is the same item, so a copy needs no making into it.
+    pub same: bool,
+    /// For a scroll made from another: the spell to give it.
+    pub spell: Option<String>,
+}
+
 /// An item to add.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Addition {
     pub holder: party::Holder,
     pub item: CatalogItem,
-    /// The item each new one is copied from: one the holder carries.
-    pub pattern: crate::value::Uuid,
-    /// Whether the pattern is the same item, so the new ones are plain copies.
-    pub same: bool,
+    pub plan: Plan,
+    /// Whether the new ones go in as one stack, for an item that stacks.
+    pub stacked: bool,
     count: u32,
 }
 
-/// Which of a holder's items a new one can be made from.
-type Fits<'a> = Box<dyn Fn(&Pattern) -> bool + 'a>;
-
-/// An item a holder carries that new items can be copied from.
+/// An item in the save new items can be copied from, and what it is.
 #[derive(Clone, Debug)]
-struct Pattern {
-    holder: party::Holder,
-    entity: crate::value::Uuid,
-    stats: String,
+struct Source {
+    donor: items::Donor,
+    /// Whose inventory it is in, when that is the party's or the camp chest's.
+    holder: Option<party::Holder>,
     kind: Kind,
     category: String,
-    /// Not in a bag, so a new item goes straight into the holder's own inventory.
-    loose: bool,
-    /// Made from one of the game's own templates, so a copy can be made into another item.
-    root: bool,
 }
 
 /// One difference between the save as opened and as it now stands.
@@ -126,8 +129,8 @@ pub struct Session {
     active: Option<mods::Active>,
     /// The game's items, for the names players see, once read from the game's files.
     catalog: Option<Arc<Catalog>>,
-    /// What each holder carries that new items can be copied from, once the catalog is in.
-    patterns: Vec<Pattern>,
+    /// What new items can be copied from, once the catalog is in.
+    sources: Vec<Source>,
     /// Items to add, in the order they were asked for.
     additions: Vec<Addition>,
 }
@@ -276,7 +279,7 @@ impl Session {
             mods,
             active,
             catalog: None,
-            patterns: Vec::new(),
+            sources: Vec::new(),
             additions: Vec::new(),
         })
     }
@@ -313,29 +316,24 @@ impl Session {
 
     /// Gives the session the game's items, for naming them as the game does.
     pub fn set_catalog(&mut self, catalog: Arc<Catalog>) {
-        let mut patterns = Vec::new();
-        for inventory in &self.original.inventories {
-            for item in &inventory.items {
-                if items::why_not_pattern(&self.globals, &self.entities, item.entity).is_some() {
-                    continue;
-                }
-                let known = catalog
-                    .by_template(&item.template)
-                    .or_else(|| catalog.by_stats(&item.stats));
-                patterns.push(Pattern {
-                    holder: inventory.holder,
-                    entity: item.entity,
-                    stats: item.stats.clone(),
+        let holders: std::collections::HashMap<crate::value::Uuid, party::Holder> = self
+            .original
+            .inventories
+            .iter()
+            .flat_map(|i| i.items.iter().map(|item| (item.entity, i.holder)))
+            .collect();
+        self.sources = items::donors(&self.globals, &self.entities)
+            .into_iter()
+            .map(|donor| {
+                let known = catalog.by_stats(&donor.stats);
+                Source {
+                    holder: holders.get(&donor.entity).copied(),
                     kind: known.map_or(Kind::Other, |k| k.kind),
                     category: known.map(|k| k.category.clone()).unwrap_or_default(),
-                    loose: !item.in_container,
-                    root: items::can_become_another(&self.globals, item.entity),
-                });
-            }
-        }
-        // Items not in a bag first, so new items go into the holder's own inventory.
-        patterns.sort_by_key(|p| !p.loose);
-        self.patterns = patterns;
+                    donor,
+                }
+            })
+            .collect();
         self.catalog = Some(catalog);
     }
 
@@ -344,58 +342,59 @@ impl Session {
         self.catalog.as_deref()
     }
 
-    /// What a new `item` for `holder` would be copied from, and whether that is the same item;
-    /// or why it can't be added.
-    pub fn pattern_for(
-        &self,
-        holder: party::Holder,
-        item: &CatalogItem,
-    ) -> Result<(crate::value::Uuid, bool), String> {
-        let (who, carry, not_worn) = match holder {
-            party::Holder::CampChest => ("The camp chest".to_owned(), "hold", ""),
-            _ => (self.holder_name(holder), "carry", ", not worn or equipped"),
+    /// How a new `item` for `holder` would be made, or why it can't be. It is a copy of the
+    /// closest item the save has: the same item, the holder's own before anyone else's,
+    /// then for a scroll another scroll, and else an item of the same kind before any other.
+    pub fn pattern_for(&self, holder: party::Holder, item: &CatalogItem) -> Result<Plan, String> {
+        // Lower is better: what it is, then whose, then whether anything of it is left out.
+        let whose = |source: &Source| match source.holder {
+            Some(h) if h == holder => 0,
+            Some(_) => 1,
+            None => 2,
         };
-        let held: Vec<&Pattern> = self
-            .patterns
+        let scroll = !item.spell.is_empty() || item.category.contains("MagicScroll");
+        let rank = |source: &Source| -> Option<(u8, u8, u8)> {
+            let donor = &source.donor;
+            let what = if donor.stats == item.stats {
+                0
+            } else if !donor.root {
+                return None;
+            } else if scroll {
+                // A scroll's spell is in records of its own, which only a scroll has.
+                donor.spell.as_ref()?;
+                1
+            } else if donor.spell.is_some() {
+                return None;
+            } else if source.kind == item.kind && source.category == item.category {
+                1
+            } else if source.kind == item.kind {
+                2
+            } else {
+                3
+            };
+            Some((what, whose(source), !donor.plain as u8))
+        };
+        let best = self
+            .sources
             .iter()
-            .filter(|p| p.holder == holder)
-            .collect();
-        if let Some(same) = held.iter().find(|p| p.stats == item.stats) {
-            return Ok((same.entity, true));
-        }
-        let potion = |category: &str| category.starts_with("Potion");
-        let (fits, needs): (Fits, String) = match item.kind {
-            _ if item.category.contains("MagicScroll") => {
-                return Err(format!(
-                    "A scroll keeps its spell with it, so {} needs to {carry} one of these \
-                     already to copy.",
-                    self.holder_in_sentence(holder)
-                ))
-            }
-            Kind::Weapon => (Box::new(|p| p.kind == Kind::Weapon), "a weapon".to_owned()),
-            Kind::Armor if !item.category.is_empty() => (
-                Box::new(|p| p.kind == Kind::Armor && p.category == item.category),
-                format!("something else worn as {}", item.category.to_lowercase()),
-            ),
-            Kind::Object if potion(&item.category) => (
-                Box::new(move |p| potion(&p.category)),
-                "a potion".to_owned(),
-            ),
-            Kind::Object if !item.category.is_empty() => (
-                Box::new(|p| p.category == item.category),
-                "something of the same kind".to_owned(),
-            ),
-            _ => {
-                return Err(format!(
-                    "{who} needs to {carry} one of these already: there is nothing like it to \
-                     make one from."
-                ))
-            }
+            .filter_map(|source| Some((rank(source)?, source)))
+            .min_by_key(|(rank, _)| *rank)
+            .map(|(_, source)| source);
+        let Some(source) = best else {
+            return Err(match scroll {
+                true => "There is no scroll anywhere in this save to make one from.".to_owned(),
+                false => "There is nothing in this save to make one from.".to_owned(),
+            });
         };
-        held.iter()
-            .find(|p| p.root && fits(p))
-            .map(|p| (p.entity, false))
-            .ok_or_else(|| format!("{who} needs to {carry} {needs} to make it from{not_worn}."))
+        let same = source.donor.stats == item.stats;
+        if scroll && !same && item.spell.is_empty() {
+            return Err("The game's files don't say which spell this scroll casts.".to_owned());
+        }
+        Ok(Plan {
+            donor: source.donor.entity,
+            same,
+            spell: (!same && scroll).then(|| item.spell.clone()),
+        })
     }
 
     /// Items to add, in the order they were asked for. How many of each is [`Field::Add`].
@@ -424,12 +423,12 @@ impl Session {
         {
             Some(index) => index,
             None => {
-                let (pattern, same) = self.pattern_for(holder, &item)?;
+                let plan = self.pattern_for(holder, &item)?;
                 self.additions.push(Addition {
                     holder,
+                    stacked: item.max_stack > 1,
                     item,
-                    pattern,
-                    same,
+                    plan,
                     count: 0,
                 });
                 self.additions.len() - 1
@@ -443,16 +442,48 @@ impl Session {
         Ok(index)
     }
 
-    /// What an addition is made from, by name: the item its holder carries that each new
-    /// one is a copy of.
-    pub fn addition_source(&self, index: usize) -> Option<String> {
-        let addition = self.additions.get(index)?;
-        self.original
-            .inventories
+    /// How an addition is made, to say: "A copy of the one Tav holds", "Made from a
+    /// Longsword someone outside the party has".
+    pub fn addition_hint(&self, index: usize) -> String {
+        let Some(addition) = self.additions.get(index) else {
+            return String::new();
+        };
+        let source = self
+            .sources
             .iter()
-            .flat_map(|i| &i.items)
-            .find(|item| item.entity == addition.pattern)
-            .map(|item| self.item_name(item))
+            .find(|s| s.donor.entity == addition.plan.donor);
+        let holder = source.and_then(|s| s.holder);
+        let place = match holder {
+            Some(party::Holder::CampChest) => "in the camp chest".to_owned(),
+            Some(h) => format!("{} holds", self.holder_name(h)),
+            None => "someone outside the party has".to_owned(),
+        };
+        let mut hint = match addition.plan.same {
+            true if holder == Some(addition.holder) => match addition.holder {
+                party::Holder::CampChest => "A copy of one in the camp chest".to_owned(),
+                h => format!("A copy of the one {} holds", self.holder_name(h)),
+            },
+            true => format!("A copy of one {place}"),
+            false => {
+                let name = source
+                    .map(|s| {
+                        self.catalog
+                            .as_ref()
+                            .and_then(|c| c.by_stats(&s.donor.stats))
+                            .map(|c| self.catalog_name(c))
+                            .unwrap_or_else(|| tidy(&s.donor.stats))
+                    })
+                    .unwrap_or_default();
+                format!("Made from a {name} {place}")
+            }
+        };
+        if addition.plan.spell.is_some() {
+            hint.push_str(", given this scroll's spell");
+        }
+        if addition.stacked {
+            hint.push_str(", as one stack");
+        }
+        hint
     }
 
     /// How many of `stats` are to be added for `holder`.
@@ -461,6 +492,26 @@ impl Session {
             .iter()
             .find(|a| a.holder == holder && a.item.stats == stats)
             .map_or(0, |a| a.count)
+    }
+
+    /// Where new items for `holder` go: the main inventory of a character, owned by them,
+    /// or of the camp chest.
+    fn destination(&self, holder: party::Holder) -> Result<items::Destination> {
+        match holder {
+            party::Holder::Character(c) => {
+                let character = self
+                    .original
+                    .characters
+                    .get(c)
+                    .ok_or_else(|| anyhow!("no character {c}"))?;
+                items::Destination::of(&self.entities, character.entity, true)
+            }
+            party::Holder::CampChest => {
+                let chest = party::camp_chest(&self.entities)
+                    .ok_or_else(|| anyhow!("the save has no camp chest"))?;
+                items::Destination::of(&self.entities, chest, false)
+            }
+        }
     }
 
     /// Whether items are named as the game names them.
@@ -536,7 +587,11 @@ impl Session {
             }
             // A stack the save already has above the editor's limit keeps its room.
             Field::Amount(..) => 1..=MAX_AMOUNT.max(self.original_value(field).unwrap_or(1)),
-            Field::Add(_) => 0..=MAX_ADDED,
+            // As one stack, up to what one holds; else one item each.
+            Field::Add(i) => match self.additions.get(i) {
+                Some(a) if a.stacked => 0..=(a.item.max_stack.min(MAX_AMOUNT as u32) as i32),
+                _ => 0..=MAX_ADDED,
+            },
         }
     }
 
@@ -844,23 +899,38 @@ impl Session {
     pub fn export(&self, parent: &Path, name: &str) -> Result<PathBuf> {
         let mut entities = self.edited_entities()?;
         let mut globals = self.globals.clone();
-        // New items: each a copy of its pattern, made into the item asked for unless it is
-        // the same one.
-        let mut added: Vec<(party::Holder, crate::value::Uuid, String)> = Vec::new();
+        // New items: each a copy of its donor in the holder's own inventory, made into the
+        // item asked for unless it is the same one; one stack of them for an item that
+        // stacks.
+        let mut added: Vec<(party::Holder, crate::value::Uuid, String, u32)> = Vec::new();
         for addition in self.additions.iter().filter(|a| a.count > 0) {
-            for _ in 0..addition.count {
-                let item = &addition.item;
-                let copy = match addition.same {
-                    true => items::copy_item(&mut globals, &mut entities, addition.pattern)?,
-                    false => items::copy_item_to(
+            let to = self.destination(addition.holder)?;
+            let (copies, amount) = match addition.stacked {
+                true => (1, Some(addition.count)),
+                false => (addition.count, None),
+            };
+            let item = &addition.item;
+            for _ in 0..copies {
+                let plan = &addition.plan;
+                let copy = items::copy_into(&mut globals, &mut entities, plan.donor, &to, amount)?;
+                if !plan.same {
+                    items::make_into(
                         &mut globals,
                         &mut entities,
-                        addition.pattern,
+                        copy,
                         &item.template,
                         &item.stats,
-                    )?,
-                };
-                added.push((addition.holder, copy, item.stats.clone()));
+                    )?;
+                }
+                if let Some(spell) = &plan.spell {
+                    items::set_spell(&mut entities, copy, spell)?;
+                }
+                added.push((
+                    addition.holder,
+                    copy,
+                    item.stats.clone(),
+                    amount.unwrap_or(1),
+                ));
             }
         }
         entities.store(&mut globals)?;
@@ -873,7 +943,7 @@ impl Session {
             let globals = written.lsf(save::GLOBALS)?;
             let mut party = party::read(&globals, &NewAge::from_lsf(&globals)?)?;
             // Every new item is where it was asked for, as the item asked for.
-            for (holder, entity, stats) in &added {
+            for (holder, entity, stats, amount) in &added {
                 let found = party
                     .inventories
                     .iter()
@@ -881,7 +951,7 @@ impl Session {
                     .flat_map(|i| &i.items)
                     .find(|i| i.entity == *entity);
                 ensure!(
-                    found.is_some_and(|i| &i.stats == stats),
+                    found.is_some_and(|i| &i.stats == stats && i.amount == *amount),
                     "an added item is not where it should be"
                 );
             }
@@ -889,7 +959,7 @@ impl Session {
             for inventory in &mut party.inventories {
                 inventory
                     .items
-                    .retain(|i| !added.iter().any(|(_, entity, _)| *entity == i.entity));
+                    .retain(|i| !added.iter().any(|(_, entity, ..)| *entity == i.entity));
             }
             party.inventories.retain(|i| !i.items.is_empty());
             ensure!(
@@ -1308,6 +1378,13 @@ mod tests {
                     "",
                 ),
                 item(
+                    "00000000-0000-0000-0000-000000005555",
+                    "WPN_Longsword",
+                    "Longsword",
+                    Kind::Weapon,
+                    "",
+                ),
+                item(
                     "00000000-0000-0000-0000-000000002222",
                     "OBJ_Scroll_Fireball",
                     "Scroll of Fireball",
@@ -1322,56 +1399,70 @@ mod tests {
 
     #[test]
     fn adds_items_copied_from_what_the_holder_carries() {
+        use party::build::{uuid, ROPE, TRADER_SWORD};
         use party::Holder;
         let dir = temp_dir("add");
         let mut session = open(&dir);
         session.set_catalog(sample_catalog(&dir));
         let hero = Holder::Character(0);
 
-        // The same item: a plain copy of the rope.
+        // The same item: a plain copy of the hero's rope.
         let rope = session.add_item(hero, "OBJ_Rope", 0.0).unwrap();
-        assert!(session.additions()[rope].same);
+        assert!(session.additions()[rope].plan.same);
+        assert_eq!(session.additions()[rope].plan.donor, uuid(ROPE));
         // Another of the same kind, made from the rope.
         let silk = session.add_item(hero, "OBJ_Rope_Silk", 10.0).unwrap();
-        assert!(!session.additions()[silk].same);
-        // Nothing to make these from.
-        let weapon = session.add_item(hero, "WPN_Longsword_1", 20.0).unwrap_err();
-        assert!(weapon.contains("a weapon"), "{weapon}");
+        assert!(!session.additions()[silk].plan.same);
+        assert_eq!(session.additions()[silk].plan.donor, uuid(ROPE));
+        // Nobody in the party has a weapon, but the trader has one equipped.
+        let sword = session.add_item(hero, "WPN_Longsword_1", 20.0).unwrap();
+        assert_eq!(session.additions()[sword].plan.donor, uuid(TRADER_SWORD));
+        assert!(session
+            .addition_hint(sword)
+            .starts_with("Made from a Longsword someone outside the party has"));
+        // There is no scroll anywhere to make a scroll from.
         let scroll = session
             .add_item(hero, "OBJ_Scroll_Fireball", 30.0)
             .unwrap_err();
         assert!(scroll.contains("scroll"), "{scroll}");
-        // The camp chest carries no rope.
-        assert!(session
+        // The camp chest gets a copy of the hero's rope.
+        let chest_rope = session
             .add_item(Holder::CampChest, "OBJ_Rope", 40.0)
-            .is_err());
+            .unwrap();
+        assert_eq!(session.addition_hint(chest_rope), "A copy of one Tav holds");
 
         // Asking again adds one more; each is a change that can be undone.
         assert_eq!(session.add_item(hero, "OBJ_Rope", 50.0).unwrap(), rope);
         assert_eq!(session.value(Field::Add(rope)), Some(2));
         let whats: Vec<String> = session.changes().iter().map(|c| c.what.clone()).collect();
-        assert_eq!(whats, ["Add Rope", "Add Silk Rope"]);
+        assert_eq!(
+            whats,
+            ["Add Rope", "Add Silk Rope", "Add Longsword +1", "Add Rope"]
+        );
         session.undo();
         assert_eq!(session.value(Field::Add(rope)), Some(1));
         assert!(session.is_dirty());
 
         let exported = session.export(&dir, "With more rope").unwrap();
         let reopened = Session::open(&exported).unwrap();
-        let hero_items: Vec<String> = reopened
-            .original()
-            .inventories
-            .iter()
-            .find(|i| i.holder == hero)
-            .unwrap()
-            .items
-            .iter()
-            .map(|i| i.stats.clone())
-            .collect();
-        assert_eq!(hero_items.iter().filter(|s| *s == "OBJ_Rope").count(), 2);
-        assert_eq!(
-            hero_items.iter().filter(|s| *s == "OBJ_Rope_Silk").count(),
-            1
-        );
+        let items_of = |holder: Holder| -> Vec<String> {
+            reopened
+                .original()
+                .inventories
+                .iter()
+                .find(|i| i.holder == holder)
+                .unwrap()
+                .items
+                .iter()
+                .map(|i| i.stats.clone())
+                .collect()
+        };
+        let hero_items = items_of(hero);
+        let count = |items: &[String], stats: &str| items.iter().filter(|s| *s == stats).count();
+        assert_eq!(count(&hero_items, "OBJ_Rope"), 2);
+        assert_eq!(count(&hero_items, "OBJ_Rope_Silk"), 1);
+        assert_eq!(count(&hero_items, "WPN_Longsword_1"), 1);
+        assert_eq!(count(&items_of(Holder::CampChest), "OBJ_Rope"), 1);
         assert_eq!(reopened.party().characters, session.party().characters);
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -129,12 +129,18 @@ pub fn show(ui: &mut Ui, session: &Session, game: &GameFiles, actions: &mut Vec<
     widgets::card(ui, |ui| {
         ui.set_width(ui.available_width());
         widgets::section_title(ui, &format!("Single items ({singles})"));
-        ui.label(
-            egui::RichText::new(
-                "One of each. The save stores no amount for these, so there is none to change.",
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(
+                    "One of each: the save keeps no count for these, so there is none to \
+                     change. To have more, press + beside one. An item that stacks is added \
+                     as a new stack, whose size you set under Adding; anything else is added \
+                     one at a time.",
+                )
+                .font(theme::body(12.5))
+                .color(theme::MUTED),
             )
-            .font(theme::body(12.5))
-            .color(theme::MUTED),
+            .wrap(),
         );
         ui.add_space(4.0);
         let columns = if ui.available_width() >= 700.0 { 2 } else { 1 };
@@ -144,16 +150,20 @@ pub fn show(ui: &mut Ui, session: &Session, game: &GameFiles, actions: &mut Vec<
             .spacing([12.0, 6.0])
             .show(ui, |ui| {
                 for (position, (_, item)) in items().filter(|(_, item)| !item.stacked).enumerate() {
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.label(
-                            egui::RichText::new(session.item_name(item)).color(theme::TEXT_SOFT),
-                        );
-                        ui.label(
-                            egui::RichText::new(detail(item))
-                                .font(theme::body(12.0))
-                                .color(theme::MUTED),
-                        );
+                    ui.horizontal(|ui| {
+                        more_button(ui, session, inventory.holder, item, actions);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            ui.label(
+                                egui::RichText::new(session.item_name(item))
+                                    .color(theme::TEXT_SOFT),
+                            );
+                            ui.label(
+                                egui::RichText::new(detail(item))
+                                    .font(theme::body(12.0))
+                                    .color(theme::MUTED),
+                            );
+                        });
                     });
                     if (position + 1) % columns == 0 {
                         ui.end_row();
@@ -171,7 +181,6 @@ fn adding(ui: &mut Ui, session: &Session, holder: Holder, actions: &mut Vec<Acti
     if mine.is_empty() {
         return;
     }
-    let who = session.holder_in_sentence(holder);
     widgets::card(ui, |ui| {
         ui.set_width(ui.available_width());
         widgets::section_title(ui, &format!("Adding ({})", mine.len()));
@@ -183,11 +192,7 @@ fn adding(ui: &mut Ui, session: &Session, holder: Holder, actions: &mut Vec<Acti
         ui.add_space(2.0);
         for index in mine {
             let addition = &session.additions()[index];
-            let source = session.addition_source(index).unwrap_or_default();
-            let hint = match addition.same {
-                true => format!("A copy of the one {who} holds · {}", addition.item.stats),
-                false => format!("Made from {who}'s {source} · {}", addition.item.stats),
-            };
+            let hint = format!("{} · {}", session.addition_hint(index), addition.item.stats);
             widgets::row(
                 ui,
                 &session.catalog_name(&addition.item),
@@ -197,4 +202,44 @@ fn adding(ui: &mut Ui, session: &Session, holder: Holder, actions: &mut Vec<Acti
         }
     });
     ui.add_space(8.0);
+}
+
+/// A + that adds one more of `item` for `holder`, or says why it can't.
+fn more_button(
+    ui: &mut Ui,
+    session: &Session,
+    holder: Holder,
+    item: &Item,
+    actions: &mut Vec<Action>,
+) {
+    let known = session
+        .catalog()
+        .and_then(|c| c.by_stats(&item.stats))
+        .cloned();
+    let why_not = match &known {
+        None if session.catalog().is_none() => {
+            Some("Needs the game's files, for what items there are.".to_owned())
+        }
+        None => Some("The game's files don't have this item, so it can't be added.".to_owned()),
+        Some(known) => session.pattern_for(holder, known).err(),
+    };
+    let button = ui
+        .add_enabled_ui(why_not.is_none(), |ui| {
+            widgets::small_button(ui, "+", Kind::Quiet)
+        })
+        .inner;
+    match why_not {
+        Some(why) => {
+            button.on_disabled_hover_text(why);
+        }
+        None => {
+            let tip = match known.is_some_and(|k| k.max_stack > 1) {
+                true => "Add more of these, as a new stack",
+                false => "Add another of these",
+            };
+            if button.on_hover_text(tip).clicked() {
+                actions.push(Action::AddItem(holder, item.stats.clone()));
+            }
+        }
+    }
 }

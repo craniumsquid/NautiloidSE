@@ -411,6 +411,14 @@ impl Inventories {
     }
 }
 
+/// The camp chest's entity, if the save has one.
+pub fn camp_chest(entities: &NewAge) -> Option<Uuid> {
+    entities
+        .table(tables::CAMP_CHEST)
+        .and_then(|table| entities.owned_rows(table).next())
+        .map(|(_, owner)| entities.entity_id(owner))
+}
+
 fn required(entities: &NewAge, name: &str) -> Result<TableId> {
     entities
         .table(name)

@@ -267,6 +267,36 @@ What adding an item would have to touch, from an unstacked scroll in a character
 - **Not an item.** A character can be carried too: one sample has a corpse in Karlach's
   pack, with a character creator and no `game.item.v0.ItemComponent`.
 
+- **Ownership, seen from the item.** `game.v0.OwneeCurrentComponent` is an offset to the
+  owner's identifier; `game.v2.OwneeHistoryComponent` is three, the owner in the first two
+  and none (all ones) in the third. Items in the camp chest belong to nobody: all ones.
+  `game.inventory.v0.WieldingComponent` (an offset to who has it equipped) and
+  `WieldedComponent` (sixteen bytes, an identifier) are on equipped and once-equipped items.
+- **Whose inventory.** `game.inventory.v0.OwnerComponent`, on a character, a bag or the
+  camp chest: a pair of offsets to a list of its inventories, then an offset to its main
+  one (a character's pack; the other is what they wear).
+- **Stacks, again.** The game groups items of one kind in an inventory into one `Stack`
+  record: a list of its items (offsets to identifiers) and a pair of offsets to
+  `StackEntry` records, each an index into that list and an amount. The item that holds the
+  stack has `NewStackComponent` (an offset to the record) and every item in it a
+  `StackMemberComponent` (an offset to the stack item's identifier). A new stack is one
+  record with one item and one entry.
+- **A scroll's spell.** `SpellBookComponent` is a pair of offsets to one 72-byte `SpellData`,
+  whose first eight bytes point at a `SpellId` (an offset to a `MetaId`, then the spell's
+  name as an offset and a length, as the template's `SkillID` names it); the `MetaId` holds
+  the name it was first given and an offset to its source. Every scroll's `SpellData` holds
+  the same sixteen-byte identifier at offset 8.
+- **Every kind of item has nearly the same tables.** A weapon and a suit of armour have the
+  same forty or so rows; scrolls add `SpellBookComponent`, food `SupplyComponent`, and some
+  objects a health row. The game fills an item in from its template on load.
+- **Pointers into the tables the editor adds to.** Found by looking for every eight bytes
+  that read as an offset of one of a table's records: `MemberData` from `MemberComponent`;
+  slot records from the inventories' lists; `Stack` from `NewStackComponent`; `StackEntry`
+  from `Stack` (+16, +24); `SpellData` from `SpellBookComponent`; `SpellId` from
+  `ConcentrationComponent`, hotbar slots (+16), `CooldownData`, `SpellData` and the spell
+  cast `SpellData` (+32). `MetaId` has more, among them a list in a character's level-up
+  record in one sample, so the editor doesn't add to it.
+
 The editor adds by appending: a new entity list with the new identifier at the end, each
 table that gains a row copied whole to the end with its owner list, and new arrays at the
 end, pointed at. Nothing already in the data moves, so every existing offset still reads

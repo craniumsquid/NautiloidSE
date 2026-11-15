@@ -234,12 +234,20 @@ fn add_item(
     let who = session.holder_in_sentence(holder);
     title(ui, &format!("Add items for {who}"));
     ui.label(
-        egui::RichText::new(format!(
-            "Each new item is a copy of one {who} already holds, made into the item you \
-             pick: a weapon from a weapon, armour from armour worn the same way, a potion \
-             from a potion. Worn, equipped and story items, and stacks, can't be copied."
-        ))
+        egui::RichText::new(
+            "Pick any of the game's items. Each new one is a copy of the closest item in \
+             this save (the same item, if anyone has one), made into the item you pick. An \
+             item that stacks is added as one stack.",
+        )
         .color(theme::TEXT_SOFT),
+    );
+    ui.label(
+        egui::RichText::new(
+            "Not yet tried in the game: copies from someone outside the party, items made \
+             from another kind of item, new stacks, and scrolls given another spell.",
+        )
+        .font(theme::body(12.5))
+        .color(theme::ACCENT),
     );
     let Some(catalog) = session.catalog() else {
         ui.label(

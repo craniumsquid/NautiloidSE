@@ -32,6 +32,13 @@ pub fn button(ui: &mut Ui, text: &str, kind: Kind) -> Response {
 }
 
 /// A button that fills the width available.
+/// A smaller button, for an action on one line of a list.
+pub fn small_button(ui: &mut Ui, text: &str, kind: Kind) -> Response {
+    let font = theme::semibold(14.0);
+    let size = Vec2::new(text_width(ui, text, &font) + 18.0, 26.0);
+    sized_button(ui, text, kind, size, font)
+}
+
 pub fn wide_button(ui: &mut Ui, text: &str, kind: Kind) -> Response {
     let size = Vec2::new(ui.available_width(), 42.0);
     sized_button(ui, text, kind, size, theme::semibold(16.0))
