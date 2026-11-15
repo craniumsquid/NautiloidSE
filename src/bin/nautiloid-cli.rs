@@ -193,6 +193,9 @@ fn run(raw: &[String]) -> Result<()> {
             out,
         ),
         "items" => items(&Args::parse(rest, &[], &["game"])?, out),
+        "owners" => owners(&Args::parse(rest, &[], &[])?, out),
+        "pointers" => pointers(&Args::parse(rest, &[], &[])?, out),
+        "donors" => donors(&Args::parse(rest, &["tables"], &["game", "kind"])?, out),
         "tables" => tables(&Args::parse(rest, &[], &[])?, out),
         "rows" => rows(&Args::parse(rest, &[], &["limit"])?, out),
         "entity" => entity(&Args::parse(rest, &[], &[])?, out),
@@ -907,6 +910,317 @@ fn items(args: &Args, out: &mut impl Write) -> Result<()> {
     writeln!(out, "camp supplies by this count: {supplies}")?;
     if let Some(total) = party.camp_supplies {
         writeln!(out, "camp supplies as stored: {total}")?;
+    }
+    Ok(())
+}
+
+/// Research: every eight bytes in the entity data that read as an offset into the table
+/// named, grouped by the table they are in and where in its rows.
+fn pointers(args: &Args, out: &mut impl Write) -> Result<()> {
+    use std::collections::BTreeMap;
+    args.expect(2, "pointers <save> <table>")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let globals = save.lsf(save::GLOBALS)?;
+    let entities = NewAge::from_lsf(&globals)?;
+    let target = entities
+        .table(&args.positional[1])
+        .ok_or_else(|| anyhow!("no table {}", args.positional[1]))?;
+    let t = &entities.tables()[target];
+    let start = (entities.row_offset(target, 0) - 48) as u64;
+    let end = start + (t.rows * t.row_len) as u64;
+    writeln!(
+        out,
+        "{}: {} rows of {}, {start}..{end}",
+        t.name, t.rows, t.row_len
+    )?;
+    let data = entities.data_section();
+    let mut found: BTreeMap<String, usize> = BTreeMap::new();
+    let mut at = 0usize;
+    while at + 8 <= data.len() {
+        let v = u64::from_le_bytes(data[at..at + 8].try_into().unwrap());
+        if v >= start && v <= end && (v - start) % t.row_len as u64 == 0 {
+            let place = match entities.locate(at as u64) {
+                Some((table, row, within)) => {
+                    let _ = row;
+                    format!("{} +{within}", entities.tables()[table].name)
+                }
+                None => "loose".to_owned(),
+            };
+            *found.entry(place).or_default() += 1;
+        }
+        at += 8;
+    }
+    for (place, n) in found {
+        writeln!(out, "{n:>7}  {place}")?;
+    }
+    Ok(())
+}
+
+/// Research: who each item in the party's inventories belongs to, by its ownership rows,
+/// compared with who holds it.
+fn owners(args: &Args, out: &mut impl Write) -> Result<()> {
+    use std::collections::BTreeMap;
+    args.expect(1, "owners <save>")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let globals = save.lsf(save::GLOBALS)?;
+    let entities = NewAge::from_lsf(&globals)?;
+    let party = party::read(&globals, &entities)?;
+    let u64_of = |b: &[u8], at: usize| u64::from_le_bytes(b[at..at + 8].try_into().unwrap());
+    let row_of = |name: &str, index: u32| -> Option<Vec<u8>> {
+        let t = entities.table(name)?;
+        let row = entities.row_of(t, index)?;
+        Some(entities.row(t, row).to_vec())
+    };
+    let name_of = |index: Option<u32>| -> String {
+        let Some(index) = index else {
+            return "-".to_owned();
+        };
+        party
+            .characters
+            .iter()
+            .find(|c| entities.entity_index(c.entity) == Some(index))
+            .map(|c| c.display_name())
+            .unwrap_or_else(|| format!("#{index}"))
+    };
+    let mut patterns: BTreeMap<String, usize> = BTreeMap::new();
+    for inventory in &party.inventories {
+        let holder = match inventory.holder {
+            party::Holder::Character(c) => party.characters[c].display_name(),
+            party::Holder::CampChest => "Camp chest".to_owned(),
+        };
+        for item in &inventory.items {
+            let Some(index) = entities.entity_index(item.entity) else {
+                continue;
+            };
+            let current = row_of("game.v0.OwneeCurrentComponent", index)
+                .and_then(|r| entities.entity_at(u64_of(&r, 0)));
+            let history = row_of("game.v2.OwneeHistoryComponent", index);
+            let hist: Vec<String> = match &history {
+                Some(r) => (0..r.len() / 8)
+                    .map(|i| {
+                        let p = u64_of(r, i * 8);
+                        if p == u64::MAX {
+                            "none".to_owned()
+                        } else {
+                            name_of(entities.entity_at(p))
+                        }
+                    })
+                    .collect(),
+                None => vec!["no-history".to_owned()],
+            };
+            let key = format!(
+                "{holder:<12} current={:<12} history={}",
+                name_of(current),
+                hist.join(",")
+            );
+            *patterns.entry(key).or_default() += 1;
+        }
+    }
+    for (key, n) in patterns {
+        writeln!(out, "{n:>5}  {key}")?;
+    }
+    // Who has ownership lists, and how long.
+    for name in [
+        "game.v0.IsCurrentOwnerComponent",
+        "game.v0.IsLatestOwnerComponent",
+        "game.v0.IsOriginalOwnerComponent",
+    ] {
+        let Some(t) = entities.table(name) else {
+            continue;
+        };
+        for (row, owner) in entities.owned_rows(t) {
+            let r = entities.row(t, row);
+            let n = (u64_of(r, 8).wrapping_sub(u64_of(r, 0))) / 8;
+            let shown = name_of(Some(owner));
+            if !shown.starts_with('#') {
+                writeln!(out, "{name}: {shown} lists {n}")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Research: every item in the save's item factory, where it is and what it is, to see
+/// what new items could be copied from.
+fn donors(args: &Args, out: &mut impl Write) -> Result<()> {
+    use nautiloid_save_editor::catalog::Catalog;
+    use std::collections::{BTreeMap, BTreeSet};
+    args.expect(1, "donors <save> [--game FOLDER] [--tables] [--kind KIND]")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let catalog = match args.get("game") {
+        Some(folder) => {
+            let folder = Path::new(folder);
+            Some(match folder.join("Shared.pak").is_file() {
+                true => Catalog::from_game(folder)?,
+                false => Catalog::from_folder(folder)?,
+            })
+        }
+        None => None,
+    };
+    let globals = save.lsf(save::GLOBALS)?;
+    let entities = NewAge::from_lsf(&globals)?;
+    let party = party::read(&globals, &entities)?;
+    let creators = globals
+        .find(&["Items", "ItemFactory", "Creators"])
+        .context("no creators")?;
+    let nodes = globals
+        .find(&["Items", "ItemFactory", "Items"])
+        .context("no items")?;
+    let u64_of = |b: &[u8], at: usize| u64::from_le_bytes(b[at..at + 8].try_into().unwrap());
+    let has = |name: &str, index: u32| {
+        entities
+            .table(name)
+            .is_some_and(|t| entities.row_of(t, index).is_some())
+    };
+    // Inventory entity -> owner entity.
+    let owned_by = entities.table("game.inventory.v1.IsOwnedComponent");
+    let inventory_owner = |inventory: u32| -> Option<u32> {
+        let t = owned_by?;
+        let row = entities.row_of(t, inventory)?;
+        entities.entity_at(u64_of(entities.row(t, row), 0))
+    };
+    let names: BTreeMap<u32, String> = party
+        .characters
+        .iter()
+        .filter_map(|c| Some((entities.entity_index(c.entity)?, c.display_name())))
+        .collect();
+    let member = entities.table("game.inventory.v0.MemberComponent");
+    let mut by_kind: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+    let mut tables_by_kind: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+    let mut count_by_kind: BTreeMap<String, usize> = BTreeMap::new();
+    let wanted_kind = args.get("kind");
+    for (creator, node) in globals
+        .children_named(creators, "Creator")
+        .zip(globals.children_named(nodes, "Item"))
+    {
+        let Some(id) = globals.get(creator, "Entity").and_then(|v| v.as_uuid()) else {
+            continue;
+        };
+        let Some(index) = entities.entity_index(id) else {
+            continue;
+        };
+        let stats = globals
+            .get(node, "Stats")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        let template_type = globals
+            .get(creator, "TemplateType")
+            .and_then(|v| v.as_i64());
+        let (kind, category, display) = match catalog.as_ref().and_then(|c| c.by_stats(&stats)) {
+            Some(item) => (
+                item.kind.label().to_owned(),
+                item.category.clone(),
+                item.display.clone(),
+            ),
+            None => ("?".to_owned(), String::new(), String::new()),
+        };
+        let mut flags = Vec::new();
+        if !has(party::tables::ITEM, index) {
+            flags.push("not-item");
+        }
+        for (name, flag) in [
+            ("game.inventory.v0.WieldingComponent", "equipped"),
+            ("game.inventory.v0.NewStackComponent", "stack"),
+            ("game.inventory.v0.StackMemberComponent", "stack-member"),
+            ("game.item.v0.IsStoryItemComponent", "story"),
+            ("game.inventory.v1.ContainerComponent", "container"),
+        ] {
+            if has(name, index) {
+                flags.push(flag);
+            }
+        }
+        // Where: the inventory's owner.
+        let place = member
+            .and_then(|t| Some((t, entities.row_of(t, index)?)))
+            .and_then(|(t, row)| {
+                let data = entities.data(u64_of(entities.row(t, row), 0), 16).ok()?;
+                entities.entity_at(u64_of(data, 0))
+            });
+        let mut owner = place.and_then(inventory_owner);
+        // A bag's owner is the bag: go up to whoever holds it.
+        for _ in 0..4 {
+            let Some(o) = owner else { break };
+            if names.contains_key(&o) || has(party::tables::ITEM, o) == false {
+                break;
+            }
+            let up = member
+                .and_then(|t| Some((t, entities.row_of(t, o)?)))
+                .and_then(|(t, row)| {
+                    let data = entities.data(u64_of(entities.row(t, row), 0), 16).ok()?;
+                    entities.entity_at(u64_of(data, 0))
+                })
+                .and_then(inventory_owner);
+            owner = up.or(owner);
+            if up.is_none() {
+                break;
+            }
+        }
+        let where_ = match (place, owner) {
+            (None, _) => "nowhere".to_owned(),
+            (Some(_), Some(o)) if names.contains_key(&o) => format!("party:{}", names[&o]),
+            (Some(_), Some(o)) => format!("other:{}", entities.entity_id(o)),
+            (Some(_), None) => "inventory-without-owner".to_owned(),
+        };
+        let status = if flags.is_empty() {
+            "free".to_owned()
+        } else {
+            flags.join(",")
+        };
+        let class = if where_.starts_with("party") {
+            "party"
+        } else if where_ == "nowhere" {
+            "nowhere"
+        } else {
+            "other"
+        };
+        *by_kind
+            .entry(format!("{kind} {category}"))
+            .or_default()
+            .entry(format!("{class}/{status}"))
+            .or_default() += 1;
+        *count_by_kind.entry(kind.clone()).or_default() += 1;
+        for t in 0..entities.tables().len() {
+            if entities.row_of(t, index).is_some() {
+                *tables_by_kind
+                    .entry(kind.clone())
+                    .or_default()
+                    .entry(entities.tables()[t].name.clone())
+                    .or_default() += 1;
+            }
+        }
+        if wanted_kind.is_some_and(|k| k == kind) {
+            writeln!(
+                out,
+                "{index:>6} {id} {display:<32} {stats:<40} {category:<16} tt={template_type:?} {status:<20} {where_}"
+            )?;
+        }
+    }
+    for (kind, places) in &by_kind {
+        writeln!(out, "{kind}")?;
+        for (place, n) in places {
+            writeln!(out, "    {n:>5}  {place}")?;
+        }
+    }
+    if args.get("tables").is_some() {
+        let all: BTreeSet<&String> = tables_by_kind.values().flat_map(|t| t.keys()).collect();
+        let kinds: Vec<&String> = tables_by_kind.keys().collect();
+        writeln!(
+            out,
+            "\ncomponent tables, share of items of each kind that have one"
+        )?;
+        write!(out, "{:<64}", "")?;
+        for k in &kinds {
+            write!(out, " {:>8}", k)?;
+        }
+        writeln!(out)?;
+        for name in all {
+            write!(out, "{name:<64}")?;
+            for k in &kinds {
+                let n = tables_by_kind[*k].get(name).copied().unwrap_or(0);
+                write!(out, " {:>7}%", n * 100 / count_by_kind[*k].max(1))?;
+            }
+            writeln!(out)?;
+        }
     }
     Ok(())
 }

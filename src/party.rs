@@ -842,7 +842,22 @@ pub mod build {
     pub const CHEST: u32 = 16;
     pub const CHEST_INSIDE: u32 = 17;
     pub const APPLES: u32 = 18;
-    pub const ENTITY_COUNT: u32 = 19;
+    /// A sword the trader has equipped.
+    pub const TRADER_SWORD: u32 = 19;
+    pub const ENTITY_COUNT: u32 = 20;
+
+    /// Every item, in entity order.
+    pub const ITEMS: [u32; 9] = [
+        HERO_GOLD,
+        BAG,
+        BAGGED_GOLD,
+        TRADER_GOLD,
+        ROPE,
+        CAMPER_GOLD,
+        POTIONS,
+        APPLES,
+        TRADER_SWORD,
+    ];
 
     pub fn id(entity: u32) -> [u8; 16] {
         let mut id = [0u8; 16];
@@ -927,6 +942,11 @@ pub mod build {
                 APPLES,
                 "00000000-0000-0000-0000-00000000eeee",
                 "CONS_FOOD_Fruit_Apple",
+            ),
+            (
+                TRADER_SWORD,
+                "00000000-0000-0000-0000-000000005555",
+                "WPN_Longsword",
             ),
         ];
         let mut items = Node::new("Creators");
@@ -1081,6 +1101,20 @@ pub mod build {
                     APPLES,
                 ]),
             },
+            // Each stack is a member of itself.
+            TableSpec {
+                name: "game.inventory.v0.StackMemberComponent",
+                row_len: 8,
+                rows: vec![vec![0; 8]; 6],
+                owners: Some(vec![
+                    HERO_GOLD,
+                    BAGGED_GOLD,
+                    TRADER_GOLD,
+                    CAMPER_GOLD,
+                    POTIONS,
+                    APPLES,
+                ]),
+            },
             TableSpec {
                 name: tables::STACK,
                 row_len: 32,
@@ -1110,22 +1144,13 @@ pub mod build {
             TableSpec {
                 name: tables::MEMBER,
                 row_len: 8,
-                rows: vec![vec![0; 8]; 8],
-                owners: Some(vec![
-                    HERO_GOLD,
-                    BAG,
-                    BAGGED_GOLD,
-                    TRADER_GOLD,
-                    ROPE,
-                    CAMPER_GOLD,
-                    POTIONS,
-                    APPLES,
-                ]),
+                rows: vec![vec![0; 8]; 9],
+                owners: Some(ITEMS.to_vec()),
             },
             TableSpec {
                 name: tables::MEMBER_DATA,
                 row_len: 16,
-                rows: vec![vec![0; 16]; 8],
+                rows: vec![vec![0; 16]; 9],
                 owners: None,
             },
             TableSpec {
@@ -1162,15 +1187,15 @@ pub mod build {
             TableSpec {
                 name: "game.inventory.v0.ContainerSlotData",
                 row_len: 16,
-                rows: vec![vec![0; 16]; 8],
+                rows: vec![words(&[0, 0, 0, 612]); 9],
                 owners: None,
             },
             // In the order the inventories list them: the hero's pack holds four, the
-            // others one each.
+            // trader's two, the others one each.
             TableSpec {
                 name: "test.v0.SlotNumbers",
                 row_len: 2,
-                rows: [0u16, 1, 2, 3, 0, 0, 0, 0]
+                rows: [0u16, 1, 2, 3, 0, 0, 1, 0, 0]
                     .iter()
                     .map(|n| n.to_le_bytes().to_vec())
                     .collect(),
@@ -1179,7 +1204,7 @@ pub mod build {
             TableSpec {
                 name: "test.v0.SlotRecords",
                 row_len: 8,
-                rows: vec![vec![0; 8]; 8],
+                rows: vec![vec![0; 8]; 9],
                 owners: None,
             },
             // Every item has an item component; owners in entity order, as the game keeps
@@ -1187,17 +1212,65 @@ pub mod build {
             TableSpec {
                 name: tables::ITEM,
                 row_len: 1,
-                rows: vec![vec![0]; 8],
-                owners: Some(vec![
-                    HERO_GOLD,
-                    BAG,
-                    BAGGED_GOLD,
-                    TRADER_GOLD,
-                    ROPE,
-                    CAMPER_GOLD,
-                    POTIONS,
-                    APPLES,
-                ]),
+                rows: vec![vec![0]; 9],
+                owners: Some(ITEMS.to_vec()),
+            },
+            // Who owns each item: its holder, or nobody for what is in the camp chest.
+            TableSpec {
+                name: "game.v0.OwneeCurrentComponent",
+                row_len: 8,
+                rows: vec![vec![0; 8]; 9],
+                owners: Some(ITEMS.to_vec()),
+            },
+            TableSpec {
+                name: "game.v2.OwneeHistoryComponent",
+                row_len: 24,
+                rows: vec![vec![0xff; 24]; 9],
+                owners: Some(ITEMS.to_vec()),
+            },
+            // What each character owns, in three lists the same.
+            TableSpec {
+                name: "game.v0.IsCurrentOwnerComponent",
+                row_len: 16,
+                rows: vec![vec![0; 16]; 3],
+                owners: Some(vec![HERO, TRADER, CAMPER]),
+            },
+            TableSpec {
+                name: "game.v0.IsLatestOwnerComponent",
+                row_len: 16,
+                rows: vec![vec![0; 16]; 3],
+                owners: Some(vec![HERO, TRADER, CAMPER]),
+            },
+            TableSpec {
+                name: "game.v0.IsOriginalOwnerComponent",
+                row_len: 16,
+                rows: vec![vec![0; 16]; 3],
+                owners: Some(vec![HERO, TRADER, CAMPER]),
+            },
+            TableSpec {
+                name: "test.v0.Owned",
+                row_len: 8,
+                rows: vec![vec![0; 8]; 8],
+                owners: None,
+            },
+            // Each holder's inventories, and its main one.
+            TableSpec {
+                name: "game.inventory.v0.OwnerComponent",
+                row_len: 24,
+                rows: vec![vec![0; 24]; 5],
+                owners: Some(vec![HERO, BAG, TRADER, CAMPER, CHEST]),
+            },
+            TableSpec {
+                name: "test.v0.Inventories",
+                row_len: 8,
+                rows: vec![vec![0; 8]; 5],
+                owners: None,
+            },
+            TableSpec {
+                name: "game.inventory.v0.WieldingComponent",
+                row_len: 8,
+                rows: vec![vec![0; 8]],
+                owners: Some(vec![TRADER_SWORD]),
             },
             // An apple is worth 3 camp supplies.
             TableSpec {
@@ -1254,6 +1327,12 @@ pub mod build {
             APPLES,
         ];
         for (stack, item) in stacks.into_iter().enumerate() {
+            point(
+                "game.inventory.v0.StackMemberComponent",
+                stack,
+                0,
+                entity(&fixed, item),
+            );
             point(tables::STACK_OF, stack, 0, at(&fixed, tables::STACK, stack));
             let items = at(&fixed, "test.v0.StackItems", stack);
             point("test.v0.StackItems", stack, 0, entity(&fixed, item));
@@ -1272,17 +1351,9 @@ pub mod build {
             CAMPER_PACK,
             HERO_PACK,
             CHEST_INSIDE,
+            TRADER_PACK,
         ];
-        let members = [
-            HERO_GOLD,
-            BAG,
-            BAGGED_GOLD,
-            TRADER_GOLD,
-            ROPE,
-            CAMPER_GOLD,
-            POTIONS,
-            APPLES,
-        ];
+        let members = ITEMS;
         // Slots counted per inventory, in the order the items are listed.
         let mut slots: Vec<(u32, u32)> = Vec::new();
         for (row, pack) in packs.into_iter().enumerate() {
@@ -1328,6 +1399,75 @@ pub mod build {
         for (row, owner) in [HERO, BAG, TRADER, CAMPER, CHEST].into_iter().enumerate() {
             point(tables::INVENTORY_OWNER, row, 0, entity(&fixed, owner));
         }
+        // Ownership: each item's owner, and what each character owns.
+        let owner_of = |item: u32| match item {
+            HERO_GOLD | BAG | BAGGED_GOLD | ROPE | POTIONS => Some(HERO),
+            TRADER_GOLD | TRADER_SWORD => Some(TRADER),
+            CAMPER_GOLD => Some(CAMPER),
+            _ => None,
+        };
+        for (row, item) in ITEMS.into_iter().enumerate() {
+            let history = "game.v2.OwneeHistoryComponent";
+            match owner_of(item) {
+                Some(owner) => {
+                    point(
+                        "game.v0.OwneeCurrentComponent",
+                        row,
+                        0,
+                        entity(&fixed, owner),
+                    );
+                    point(history, row, 0, entity(&fixed, owner));
+                    point(history, row, 4, 0);
+                    point(history, row, 8, entity(&fixed, owner));
+                    point(history, row, 12, 0);
+                }
+                None => {
+                    point("game.v0.OwneeCurrentComponent", row, 0, u32::MAX);
+                    point("game.v0.OwneeCurrentComponent", row, 4, u32::MAX);
+                }
+            }
+        }
+        let mut owned = 0;
+        for (row, owner) in [HERO, TRADER, CAMPER].into_iter().enumerate() {
+            let first = owned;
+            for item in ITEMS.into_iter().filter(|&i| owner_of(i) == Some(owner)) {
+                point("test.v0.Owned", owned, 0, entity(&fixed, item));
+                owned += 1;
+            }
+            let begin = at(&fixed, "test.v0.Owned", first);
+            let end = begin + (owned - first) as u32 * 8;
+            for name in [
+                "game.v0.IsCurrentOwnerComponent",
+                "game.v0.IsLatestOwnerComponent",
+                "game.v0.IsOriginalOwnerComponent",
+            ] {
+                point(name, row, 0, begin);
+                point(name, row, 8, end);
+            }
+        }
+        for (row, inventory) in [
+            HERO_PACK,
+            BAG_INSIDE,
+            TRADER_PACK,
+            CAMPER_PACK,
+            CHEST_INSIDE,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let list = at(&fixed, "test.v0.Inventories", row);
+            point("test.v0.Inventories", row, 0, entity(&fixed, inventory));
+            let owner = "game.inventory.v0.OwnerComponent";
+            point(owner, row, 0, list);
+            point(owner, row, 8, list + 8);
+            point(owner, row, 16, entity(&fixed, inventory));
+        }
+        point(
+            "game.inventory.v0.WieldingComponent",
+            0,
+            0,
+            entity(&fixed, TRADER),
+        );
         NewAge::parse(data.to_bytes()).unwrap()
     }
 }
