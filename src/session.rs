@@ -594,6 +594,15 @@ impl Session {
             Field::Add(i) => self.additions[i].count = value.max(0) as u32,
             _ => set_field(&mut self.current, field, value),
         }
+        // The number a save keeps beside Inspiration goes up with an amount that passes it,
+        // as the export writes it, and back down when the amount does.
+        if let (Field::Inspiration, Some(now), Some(before)) = (
+            field,
+            self.current.inspiration.as_mut(),
+            self.original.inspiration,
+        ) {
+            now.max = before.max.max(now.amount);
+        }
     }
 
     pub fn is_changed(&self, field: Field) -> bool {
@@ -1612,7 +1621,8 @@ mod tests {
         session.set(Field::Allocated(0, 0), 7, 20.0);
         // Makes the bagged stack the larger one, which reorders the stacks when read back.
         session.set(Field::Gold(0, 1), 5000, 30.0);
-        session.set(Field::Inspiration, 4, 40.0);
+        // Past the number the save keeps beside it, which the export raises too.
+        session.set(Field::Inspiration, 6, 40.0);
 
         assert_eq!(session.default_export_folder(), dir);
         let name = session.suggested_name(&dir);
@@ -1642,7 +1652,7 @@ mod tests {
         assert_eq!((hero.experience, hero.entitled_level), (Some(7100), 6));
         assert_eq!(hero.allocated, Some([7, 6, 7, 0, 2, 7]));
         assert_eq!(hero.gold_total(), 8385);
-        assert_eq!(reopened.value(Field::Inspiration), Some(4));
+        assert_eq!(reopened.value(Field::Inspiration), Some(6));
 
         // The name is now taken, here and for the next suggestion.
         assert!(session.export(&dir, &name).is_err());
