@@ -12,7 +12,7 @@
 use crate::lsf::Lsf;
 use crate::newage::{NewAge, TableId};
 use crate::value::Uuid;
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{anyhow, ensure, Result};
 use std::collections::HashMap;
 
 /// Tables and field offsets in the entity data.
@@ -61,6 +61,18 @@ pub mod tables {
     pub const MEMBER_DATA: &str = "game.inventory.v0.MemberData";
     /// Rows of 8 bytes, one per inventory: an offset to its owner's entity identifier.
     pub const INVENTORY_OWNER: &str = "game.inventory.v1.IsOwnedComponent";
+    /// Rows of 48 bytes, on a companion: three pairs of offsets. The first is to a list of
+    /// offsets to the entities approved of (the players' characters), the second to an i32
+    /// rating for each, the third to 16-byte identifiers, one for each thing that has moved
+    /// the rating. Every field is all ones on a companion who has no rating yet.
+    pub const APPROVAL: &str = "game.approval.v0.Ratings";
+    /// Rows of 4 bytes, on a food item: the camp supplies one of it is worth.
+    pub const SUPPLY: &str = "game.camp.v0.SupplyComponent";
+    /// One row, on the camp chest.
+    pub const CAMP_CHEST: &str = "game.camp.v1.ChestComponent";
+    /// One byte, on every item. A character can be in an inventory too (a carried corpse,
+    /// in one sample), and has none.
+    pub const ITEM: &str = "game.item.v0.ItemComponent";
 }
 
 pub const ABILITIES: [&str; 6] = [
@@ -79,6 +91,9 @@ pub const MAX_ALLOCATED: u32 = 22;
 /// The highest level this editor will entitle a character to. The game stops at 12; mods
 /// raise that to 20.
 pub const MAX_LEVEL: u32 = 20;
+/// The range the game keeps approval in.
+pub const APPROVAL_MIN: i32 = -50;
+pub const APPROVAL_MAX: i32 = 100;
 /// The template of the gold item.
 pub const GOLD_TEMPLATE: &str = "1c3c9c74-34a1-4685-989e-410dc080be6f";
 /// The resource on the party's entity that counts Inspiration.
@@ -95,7 +110,55 @@ pub struct GoldStack {
     pub in_container: bool,
 }
 
-/// A party member.
+/// What a companion thinks of one of the players' characters.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Approval {
+    /// The character approved of.
+    pub of: Uuid,
+    pub rating: i32,
+}
+
+/// Something a character carries or the camp chest holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Item {
+    /// The item's entity, which identifies it for [`set_amount`].
+    pub entity: Uuid,
+    /// The game's own name for what it is, for example `FOOD_FRUIT_APPLE`. The names shown in
+    /// the game are in its language files, not in the save.
+    pub stats: String,
+    /// The template it was made from, as its creator in the node tree gives it. With the
+    /// game's own files, this gives the name players see.
+    pub template: String,
+    /// How many there are: 1 for an item that is not a stack.
+    pub amount: u32,
+    /// Whether the amount can be changed. Only a stack has one stored.
+    pub stacked: bool,
+    /// Whether it is inside a bag or other container.
+    pub in_container: bool,
+    /// For food, the camp supplies one of it is worth.
+    pub supply: Option<u32>,
+    /// Whether it is marked as wares, for selling.
+    pub wares: bool,
+}
+
+/// Who holds an inventory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Holder {
+    /// A character, by position in [`Party::characters`].
+    Character(usize),
+    CampChest,
+}
+
+/// What one holder has. Gold a character carries is not listed here: it is that
+/// character's [`Character::gold`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Inventory {
+    pub holder: Holder,
+    /// By name, then by entity, so the order is the same on every read.
+    pub items: Vec<Item>,
+}
+
+/// A character the player controls: a party member, or a companion waiting at camp.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Character {
     /// The entity's identifier in the save.
@@ -108,8 +171,9 @@ pub struct Character {
     pub level: u32,
     /// The level the character is entitled to. Above `level`, the game offers a level-up.
     pub entitled_level: u32,
-    /// Total experience. The game shows experience into the current level.
-    pub experience: u32,
+    /// Total experience, for a character in the party. The game shows experience into the
+    /// current level. It keeps none for a companion at camp, who has `None`.
+    pub experience: Option<u32>,
     /// Ability score totals, Strength to Charisma, with every bonus applied. Read only: the
     /// game recalculates them on load.
     pub abilities: [u32; 6],
@@ -117,11 +181,19 @@ pub struct Character {
     /// characters that have a character creation record.
     pub allocated: Option<[u32; 6]>,
     pub gold: Vec<GoldStack>,
+    /// A companion's approval of each player's character: one entry in a game for one
+    /// player. Empty for the player's own character and a companion not yet met.
+    pub approval: Vec<Approval>,
 }
 
 impl Character {
     pub fn gold_total(&self) -> u64 {
         self.gold.iter().map(|g| g.amount as u64).sum()
+    }
+
+    /// Whether the character is in the party, not waiting at camp.
+    pub fn in_party(&self) -> bool {
+        self.experience.is_some()
     }
 
     /// A name to show: the stored one, or the companion's for a character played as an
@@ -161,19 +233,27 @@ pub struct Inspiration {
     pub max: u32,
 }
 
-/// The party and what it shares.
+/// The party, the companions at camp, and what the party shares.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Party {
-    /// In the order the save lists them.
+    /// The party in the order the save lists it, then the companions at camp.
     pub characters: Vec<Character>,
+    /// What each character and the camp chest hold. A holder with nothing has no entry.
+    pub inventories: Vec<Inventory>,
     pub inspiration: Option<Inspiration>,
     /// Read only: the game recalculates it from the food items on load.
     pub camp_supplies: Option<u32>,
 }
 
 impl Party {
+    /// The gold the party carries, which is the number the game shows. What companions at
+    /// camp carry is not part of it.
     pub fn gold_total(&self) -> u64 {
-        self.characters.iter().map(Character::gold_total).sum()
+        self.characters
+            .iter()
+            .filter(|c| c.in_party())
+            .map(Character::gold_total)
+            .sum()
     }
 }
 
@@ -212,10 +292,59 @@ fn templates(globals: &Lsf) -> HashMap<Uuid, String> {
     out
 }
 
+/// The game's name for every item, by entity identifier, from the node tree. The item
+/// factory lists its creators and its items in the same order.
+/// The items marked as wares: bit 33 of the `Flags` on their item nodes.
+fn wares(globals: &Lsf) -> std::collections::HashSet<Uuid> {
+    let mut out = std::collections::HashSet::new();
+    let (Some(creators), Some(items)) = (
+        globals.find(&["Items", "ItemFactory", "Creators"]),
+        globals.find(&["Items", "ItemFactory", "Items"]),
+    ) else {
+        return out;
+    };
+    let creators = globals.children_named(creators, "Creator");
+    let items = globals.children_named(items, "Item");
+    for (creator, item) in creators.zip(items) {
+        let marked = matches!(
+            globals.get(item, "Flags"),
+            Some(crate::value::Value::ULongLong(flags)) if flags & crate::items::WARES != 0
+        );
+        if let (true, Some(entity)) = (
+            marked,
+            globals.get(creator, "Entity").and_then(|v| v.as_uuid()),
+        ) {
+            out.insert(entity);
+        }
+    }
+    out
+}
+
+fn stats_names(globals: &Lsf) -> HashMap<Uuid, String> {
+    let mut out = HashMap::new();
+    let (Some(creators), Some(items)) = (
+        globals.find(&["Items", "ItemFactory", "Creators"]),
+        globals.find(&["Items", "ItemFactory", "Items"]),
+    ) else {
+        return out;
+    };
+    let creators = globals.children_named(creators, "Creator");
+    let items = globals.children_named(items, "Item");
+    for (creator, item) in creators.zip(items) {
+        if let (Some(entity), Some(stats)) = (
+            globals.get(creator, "Entity").and_then(|v| v.as_uuid()),
+            globals.get(item, "Stats"),
+        ) {
+            out.insert(entity, stats.as_str().unwrap_or_default().to_owned());
+        }
+    }
+    out
+}
+
 /// Where a stacked item's amount is and what it holds.
 struct Stacked {
-    /// Row of [`tables::STACK_ENTRY`].
-    entry: usize,
+    /// Where its stack entry is in the data section.
+    entry: u64,
     amount: u32,
 }
 
@@ -235,19 +364,13 @@ impl Inventories {
         let mut out = Inventories::default();
         let table = |name: &str| entities.table(name);
 
-        // A save with no stacks or no inventories simply lacks the tables.
-        if let (Some(stack_of), Some(stack), Some(entry)) = (
-            table(tables::STACK_OF),
-            table(tables::STACK),
-            table(tables::STACK_ENTRY),
-        ) {
+        // A save with no stacks or no inventories simply lacks the tables. Offsets are
+        // followed wherever they lead: the game keeps what they point at in a table, and this
+        // editor appends what it adds to the end of the data.
+        if let Some(stack_of) = table(tables::STACK_OF) {
             for (row, _) in entities.owned_rows(stack_of) {
                 let target = u64_of(entities.row(stack_of, row), 0);
-                let Some((found, stack_row, 0)) = entities.locate(target) else {
-                    bail!("a stack points outside the stack table");
-                };
-                ensure!(found == stack, "a stack points outside the stack table");
-                let fields = entities.row(stack, stack_row);
+                let fields = entities.data(target, 32)?;
                 let (items, items_end) = (u64_of(fields, 0), u64_of(fields, 8));
                 let (entries, entries_end) = (u64_of(fields, 16), u64_of(fields, 24));
                 ensure!(
@@ -256,15 +379,12 @@ impl Inventories {
                 );
                 let item_count = ((items_end - items) / 8) as usize;
                 let item_offsets = entities.data(items, item_count * 8)?;
+                ensure!(
+                    (entries_end - entries).is_multiple_of(8),
+                    "a stack's entries are not whole"
+                );
                 for at in (entries..entries_end).step_by(8) {
-                    let Some((found, entry_row, 0)) = entities.locate(at) else {
-                        bail!("a stack's entries are outside the stack entry table");
-                    };
-                    ensure!(
-                        found == entry,
-                        "a stack's entries are outside the stack entry table"
-                    );
-                    let fields = entities.row(entry, entry_row);
+                    let fields = entities.data(at, 8)?;
                     let index = u16::from_le_bytes([fields[0], fields[1]]) as usize;
                     ensure!(
                         index < item_count,
@@ -275,7 +395,7 @@ impl Inventories {
                         out.stacked.insert(
                             item,
                             Stacked {
-                                entry: entry_row,
+                                entry: at,
                                 amount: u32_of(fields, tables::STACK_ENTRY_AMOUNT),
                             },
                         );
@@ -284,18 +404,12 @@ impl Inventories {
             }
         }
 
-        if let (Some(member), Some(member_data)) =
-            (table(tables::MEMBER), table(tables::MEMBER_DATA))
-        {
+        if let Some(member) = table(tables::MEMBER) {
             for (row, item) in entities.owned_rows(member) {
                 let target = u64_of(entities.row(member, row), 0);
-                if let Some((found, data_row, 0)) = entities.locate(target) {
-                    if found == member_data {
-                        let inventory = u64_of(entities.row(member_data, data_row), 0);
-                        if let Some(inventory) = entities.entity_at(inventory) {
-                            out.inventory_of.insert(item, inventory);
-                        }
-                    }
+                let inventory = u64_of(entities.data(target, 16)?, 0);
+                if let Some(inventory) = entities.entity_at(inventory) {
+                    out.inventory_of.insert(item, inventory);
                 }
             }
         }
@@ -323,6 +437,14 @@ impl Inventories {
         }
         None
     }
+}
+
+/// The camp chest's entity, if the save has one.
+pub fn camp_chest(entities: &NewAge) -> Option<Uuid> {
+    entities
+        .table(tables::CAMP_CHEST)
+        .and_then(|table| entities.owned_rows(table).next())
+        .map(|(_, owner)| entities.entity_id(owner))
 }
 
 fn required(entities: &NewAge, name: &str) -> Result<TableId> {
@@ -353,6 +475,40 @@ fn resource(entities: &NewAge, entity: u32, id: Uuid) -> Result<Option<u64>> {
     Ok(None)
 }
 
+fn exact4(bytes: &[u8]) -> [u8; 4] {
+    [bytes[0], bytes[1], bytes[2], bytes[3]]
+}
+
+/// A companion's ratings: for each, the character approved of and where the rating is in
+/// the data section.
+fn approvals(entities: &NewAge, companion: u32) -> Result<Vec<(Uuid, u64)>> {
+    let Some(table) = entities.table(tables::APPROVAL) else {
+        return Ok(Vec::new());
+    };
+    let Some(row) = entities.row_of(table, companion) else {
+        return Ok(Vec::new());
+    };
+    let fields = entities.row(table, row);
+    let (of, of_end) = (u64_of(fields, 0), u64_of(fields, 8));
+    let (ratings, ratings_end) = (u64_of(fields, 16), u64_of(fields, 24));
+    if of == u64::MAX {
+        return Ok(Vec::new());
+    }
+    ensure!(
+        of <= of_end && ratings <= ratings_end && (of_end - of) / 8 == (ratings_end - ratings) / 4,
+        "a companion's approval lists do not match"
+    );
+    let mut out = Vec::new();
+    for i in 0..(of_end - of) / 8 {
+        let target = u64_of(entities.data(of + i * 8, 8)?, 0);
+        let entity = entities
+            .entity_at(target)
+            .ok_or_else(|| anyhow!("an approval rating is of no entity in the save"))?;
+        out.push((entities.entity_id(entity), ratings + i * 4));
+    }
+    Ok(out)
+}
+
 fn inspiration_id() -> Uuid {
     Uuid::parse(INSPIRATION).unwrap_or(Uuid([0; 16]))
 }
@@ -379,14 +535,33 @@ fn whole(bytes: &[u8]) -> Result<u32> {
 pub fn read(globals: &Lsf, entities: &NewAge) -> Result<Party> {
     let templates = templates(globals);
     let experience = required(entities, tables::EXPERIENCE)?;
-    let members: Vec<u32> = entities
+    // The party is whoever has experience.
+    let mut members: Vec<u32> = entities
         .owned_rows(experience)
         .map(|(_, owner)| owner)
         .collect();
+    let party_size = members.len();
     let creation = entities.table(tables::CREATION);
+    // Everyone else with a character creation record is a companion waiting at camp. They
+    // keep their level, their ability points and what they carry, but no experience.
+    if let Some(creation) = creation {
+        let has = |name: &str, entity: u32| {
+            entities
+                .table(name)
+                .is_some_and(|table| entities.row_of(table, entity).is_some())
+        };
+        for (_, owner) in entities.owned_rows(creation) {
+            let complete = [tables::LEVEL, tables::ENTITLED_LEVEL, tables::STATS]
+                .iter()
+                .all(|name| has(name, owner));
+            if complete && !members.contains(&owner) {
+                members.push(owner);
+            }
+        }
+    }
 
     let mut characters = Vec::with_capacity(members.len());
-    for &index in &members {
+    for (position, &index) in members.iter().enumerate() {
         let entity = entities.entity_id(index);
         let mut abilities = [0u32; 6];
         for (i, ability) in abilities.iter_mut().enumerate() {
@@ -419,14 +594,30 @@ pub fn read(globals: &Lsf, entities: &NewAge) -> Result<Party> {
             name,
             level: entities.get_u32(tables::LEVEL, index, 0)?,
             entitled_level: entities.get_u32(tables::ENTITLED_LEVEL, index, 0)?,
-            experience: entities.get_u32(tables::EXPERIENCE, index, tables::EXPERIENCE_TOTAL[0])?,
+            experience: match position < party_size {
+                true => Some(entities.get_u32(
+                    tables::EXPERIENCE,
+                    index,
+                    tables::EXPERIENCE_TOTAL[0],
+                )?),
+                false => None,
+            },
             abilities,
             allocated,
             gold: Vec::new(),
+            approval: approvals(entities, index)?
+                .into_iter()
+                .map(|(of, at)| {
+                    Ok(Approval {
+                        of,
+                        rating: i32::from_le_bytes(exact4(entities.data(at, 4)?)),
+                    })
+                })
+                .collect::<Result<_>>()?,
         });
     }
 
-    // Gold: every stacked item made from the gold template that a party member holds.
+    // Gold: every stacked item made from the gold template that one of them holds.
     let inventories = Inventories::read(entities)?;
     for (&item, stacked) in &inventories.stacked {
         let id = entities.entity_id(item);
@@ -455,6 +646,64 @@ pub fn read(globals: &Lsf, entities: &NewAge) -> Result<Party> {
         });
     }
 
+    // Everything else they hold, and what is in the camp chest.
+    let stats = stats_names(globals);
+    let wares = wares(globals);
+    let chest = entities
+        .table(tables::CAMP_CHEST)
+        .and_then(|table| entities.owned_rows(table).next())
+        .map(|(_, owner)| owner);
+    let supply = entities.table(tables::SUPPLY);
+    let is_item: std::collections::HashSet<u32> = entities
+        .table(tables::ITEM)
+        .map(|t| entities.owned_rows(t).map(|(_, owner)| owner).collect())
+        .unwrap_or_default();
+    let mut held: HashMap<Holder, Vec<Item>> = HashMap::new();
+    for &item in inventories.inventory_of.keys() {
+        if !is_item.contains(&item) {
+            continue;
+        }
+        let Some((owner, in_container)) =
+            inventories.holder(item, |e| members.contains(&e) || Some(e) == chest)
+        else {
+            continue;
+        };
+        let holder = match members.iter().position(|&m| m == owner) {
+            Some(position) => Holder::Character(position),
+            None => Holder::CampChest,
+        };
+        let id = entities.entity_id(item);
+        let is_gold = templates.get(&id).map(String::as_str) == Some(GOLD_TEMPLATE);
+        let stacked = inventories.stacked.get(&item);
+        if is_gold && stacked.is_some() && holder != Holder::CampChest {
+            // A character's gold is listed with the character.
+            continue;
+        }
+        held.entry(holder).or_default().push(Item {
+            entity: id,
+            stats: stats.get(&id).cloned().unwrap_or_default(),
+            template: templates.get(&id).cloned().unwrap_or_default(),
+            amount: stacked.map_or(1, |s| s.amount),
+            stacked: stacked.is_some(),
+            in_container,
+            supply: supply
+                .and_then(|table| entities.row_of(table, item).map(|row| (table, row)))
+                .map(|(table, row)| u32_of(entities.row(table, row), 0)),
+            wares: wares.contains(&id),
+        });
+    }
+    let mut inventories: Vec<Inventory> = held
+        .into_iter()
+        .map(|(holder, mut items)| {
+            items.sort_by(|a, b| (&a.stats, a.entity.0).cmp(&(&b.stats, b.entity.0)));
+            Inventory { holder, items }
+        })
+        .collect();
+    inventories.sort_by_key(|inventory| match inventory.holder {
+        Holder::Character(position) => position,
+        Holder::CampChest => usize::MAX,
+    });
+
     let mut inspiration = None;
     if let Some(party) = party_entity(entities) {
         if let Some(at) = resource(entities, party, inspiration_id())? {
@@ -473,19 +722,26 @@ pub fn read(globals: &Lsf, entities: &NewAge) -> Result<Party> {
 
     Ok(Party {
         characters,
+        inventories,
         inspiration,
         camp_supplies,
     })
 }
 
-fn member(entities: &NewAge, character: Uuid) -> Result<u32> {
-    let index = entities
+/// The entity of a character, in the party or at camp.
+fn character_index(entities: &NewAge, character: Uuid) -> Result<u32> {
+    entities
         .entity_index(character)
-        .ok_or_else(|| anyhow!("no entity {character} in the save"))?;
+        .ok_or_else(|| anyhow!("no entity {character} in the save"))
+}
+
+/// The entity of a party member.
+fn member(entities: &NewAge, character: Uuid) -> Result<u32> {
+    let index = character_index(entities, character)?;
     let experience = required(entities, tables::EXPERIENCE)?;
     ensure!(
         entities.row_of(experience, index).is_some(),
-        "{character} is not a party member"
+        "{character} is not in the party, and the game keeps experience only for the party"
     );
     Ok(index)
 }
@@ -505,10 +761,10 @@ pub fn set_experience(entities: &mut NewAge, character: Uuid, total: u32) -> Res
     Ok(())
 }
 
-/// Sets the level a party member is entitled to. Above their level, the game offers a
-/// level-up and takes the player through the choices itself.
+/// Sets the level a character is entitled to. Above their level, the game offers a level-up
+/// and takes the player through the choices itself.
 pub fn set_entitled_level(entities: &mut NewAge, character: Uuid, level: u32) -> Result<()> {
-    let index = member(entities, character)?;
+    let index = character_index(entities, character)?;
     let current = entities.get_u32(tables::LEVEL, index, 0)?;
     ensure!(
         (current..=MAX_LEVEL).contains(&level),
@@ -531,7 +787,7 @@ pub fn set_allocated(
         points <= MAX_ALLOCATED,
         "at most {MAX_ALLOCATED} points can go into an ability"
     );
-    let index = member(entities, character)?;
+    let index = character_index(entities, character)?;
     let current = entities.get_array_u32(tables::CREATION, index, tables::CREATION_ABILITIES)?;
     ensure!(
         current.len() == 7,
@@ -544,14 +800,35 @@ pub fn set_allocated(
         tables::CREATION_ABILITIES,
         ability + 1,
         points,
-    )
+    )?;
+    // The score as the game will work it out on load, moved as the points have, so the
+    // save reads the same before the game next writes it. The game ignores what is here.
+    let at = tables::STATS_ABILITIES + ability * 4;
+    let score = entities.get_u32(tables::STATS, index, at)?;
+    let moved = (score + points).saturating_sub(current[ability + 1]);
+    entities.set_u32(tables::STATS, index, at, moved)
+}
+
+/// Sets what a companion thinks of the character `of`, as [`Approval::of`] gives it.
+pub fn set_approval(entities: &mut NewAge, companion: Uuid, of: Uuid, rating: i32) -> Result<()> {
+    let index = character_index(entities, companion)?;
+    let (_, at) = approvals(entities, index)?
+        .into_iter()
+        .find(|(id, _)| *id == of)
+        .ok_or_else(|| anyhow!("{companion} has no approval rating of {of}"))?;
+    entities.set_data(at, &rating.to_le_bytes())
 }
 
 /// Sets the amount of a gold stack, named by its item as [`GoldStack::item`] gives it.
 pub fn set_gold(entities: &mut NewAge, item: Uuid, amount: u32) -> Result<()> {
+    set_amount(entities, item, amount)
+}
+
+/// Sets how many a stack of items holds, named by its item as [`Item::entity`] gives it.
+pub fn set_amount(entities: &mut NewAge, item: Uuid, amount: u32) -> Result<()> {
     ensure!(
         (1..=i32::MAX as u32).contains(&amount),
-        "a gold stack holds from 1 to {}",
+        "a stack holds from 1 to {}",
         i32::MAX
     );
     let index = entities
@@ -562,12 +839,8 @@ pub fn set_gold(entities: &mut NewAge, item: Uuid, amount: u32) -> Result<()> {
         .stacked
         .get(&index)
         .ok_or_else(|| anyhow!("item {item} is not in a stack"))?;
-    entities.set_row_u32(
-        tables::STACK_ENTRY,
-        stacked.entry,
-        tables::STACK_ENTRY_AMOUNT,
-        amount,
-    )
+    let at = stacked.entry + tables::STACK_ENTRY_AMOUNT as u64;
+    entities.set_data(at, &amount.to_le_bytes())
 }
 
 /// Sets the party's Inspiration points, up to the maximum the save already allows.
@@ -606,7 +879,29 @@ pub mod build {
     pub const TRADER_PACK: u32 = 9;
     pub const TRADER_GOLD: u32 = 10;
     pub const ROPE: u32 = 11;
-    pub const ENTITY_COUNT: u32 = 12;
+    pub const CAMPER: u32 = 12;
+    pub const CAMPER_GOLD: u32 = 13;
+    pub const CAMPER_PACK: u32 = 14;
+    pub const POTIONS: u32 = 15;
+    pub const CHEST: u32 = 16;
+    pub const CHEST_INSIDE: u32 = 17;
+    pub const APPLES: u32 = 18;
+    /// A sword the trader has equipped.
+    pub const TRADER_SWORD: u32 = 19;
+    pub const ENTITY_COUNT: u32 = 20;
+
+    /// Every item, in entity order.
+    pub const ITEMS: [u32; 9] = [
+        HERO_GOLD,
+        BAG,
+        BAGGED_GOLD,
+        TRADER_GOLD,
+        ROPE,
+        CAMPER_GOLD,
+        POTIONS,
+        APPLES,
+        TRADER_SWORD,
+    ];
 
     pub fn id(entity: u32) -> [u8; 16] {
         let mut id = [0u8; 16];
@@ -646,13 +941,70 @@ pub mod build {
         let characters = Node::new("Creators")
             .child(creator(HERO, "e285d7b5-6b09-4857-89aa-a91e9e6898e5"))
             .child(creator(COMPANION, "2c76687d-93a2-477b-8b18-8a14b549304c"))
-            .child(creator(TRADER, "00000000-0000-0000-0000-00000000aaaa"));
-        let items = Node::new("Creators")
-            .child(creator(HERO_GOLD, GOLD_TEMPLATE))
-            .child(creator(BAGGED_GOLD, GOLD_TEMPLATE))
-            .child(creator(TRADER_GOLD, GOLD_TEMPLATE))
-            .child(creator(BAG, "00000000-0000-0000-0000-00000000bbbb"))
-            .child(creator(ROPE, "00000000-0000-0000-0000-00000000cccc"));
+            .child(creator(TRADER, "00000000-0000-0000-0000-00000000aaaa"))
+            .child(creator(CAMPER, "ad9af97d-75da-406a-ae13-7071c563f604"));
+        // Items as the game writes them: a creator with the template as a UUID and an
+        // identifier of its own, and an item node in the same position.
+        let item_creator = |entity: u32, template: &str| {
+            let template = Uuid::parse(template).expect("a sample template is a UUID");
+            Node::new("Creator")
+                .attr("Entity", DataType::Uuid, Value::Uuid(uuid(entity)))
+                .attr("TemplateType", DataType::Byte, Value::Byte(0))
+                .attr("TemplateID", DataType::Uuid, Value::Uuid(template))
+                .attr(
+                    "UUID",
+                    DataType::Uuid,
+                    Value::Uuid(Uuid([entity as u8 + 0x40; 16])),
+                )
+        };
+        let item_node = |template: &str, stats: &str| {
+            let template = Uuid::parse(template).expect("a sample template is a UUID");
+            // As the game writes them; the rope is marked as wares.
+            let flags = match stats {
+                "OBJ_Rope" => 0x8002_0000_000c,
+                _ => 0x8000_0000_000c,
+            };
+            Node::new("Item")
+                .attr("Flags", DataType::ULongLong, Value::ULongLong(flags))
+                .attr("Level", DataType::FixedString, Value::Text(String::new()))
+                .attr("CurrentTemplate", DataType::Uuid, Value::Uuid(template))
+                .attr("CurrentTemplateType", DataType::Byte, Value::Byte(0))
+                .attr("Stats", DataType::FixedString, Value::Text(stats.into()))
+                .child(Node::new("ItemMachine"))
+        };
+        let sample_items = [
+            (HERO_GOLD, GOLD_TEMPLATE, "LOOT_Gold_A"),
+            (BAGGED_GOLD, GOLD_TEMPLATE, "LOOT_Gold_A"),
+            (TRADER_GOLD, GOLD_TEMPLATE, "LOOT_Gold_A"),
+            (CAMPER_GOLD, GOLD_TEMPLATE, "LOOT_Gold_A"),
+            (
+                BAG,
+                "00000000-0000-0000-0000-00000000bbbb",
+                "OBJ_Bag_AlchemyPouch",
+            ),
+            (ROPE, "00000000-0000-0000-0000-00000000cccc", "OBJ_Rope"),
+            (
+                POTIONS,
+                "00000000-0000-0000-0000-00000000dddd",
+                "OBJ_Potion_Healing",
+            ),
+            (
+                APPLES,
+                "00000000-0000-0000-0000-00000000eeee",
+                "CONS_FOOD_Fruit_Apple",
+            ),
+            (
+                TRADER_SWORD,
+                "00000000-0000-0000-0000-000000005555",
+                "WPN_Longsword",
+            ),
+        ];
+        let mut items = Node::new("Creators");
+        let mut item_list = Node::new("Items");
+        for (entity, template, stats) in sample_items {
+            items = items.child(item_creator(entity, template));
+            item_list = item_list.child(item_node(template, stats));
+        }
         let entities = Node::new(crate::newage::NODE).attr(
             crate::newage::NODE,
             DataType::ScratchBuffer,
@@ -660,7 +1012,7 @@ pub mod build {
         );
         tree::lsf(&[
             Node::new("Characters").child(Node::new("CharacterFactory").child(characters)),
-            Node::new("Items").child(Node::new("ItemFactory").child(items)),
+            Node::new("Items").child(Node::new("ItemFactory").child(items).child(item_list)),
             entities,
         ])
         .expect("the sample tree is well formed")
@@ -672,7 +1024,9 @@ pub mod build {
     }
 
     /// Entity data for a hero with 3385 gold loose and 371 in a bag, a companion with none,
-    /// a trader with 500, and a party with 3 of 4 Inspiration.
+    /// a companion at camp with 120, a trader with 500, and a party with 3 of 4 Inspiration.
+    /// The hero also carries a bag, a rope and three healing potions, and the camp chest
+    /// holds four apples.
     pub fn sample_entities() -> NewAge {
         let entities: Vec<[u8; 16]> = (0..ENTITY_COUNT).map(id).collect();
         let stats = |abilities: [u32; 6]| {
@@ -691,14 +1045,14 @@ pub mod build {
             TableSpec {
                 name: tables::LEVEL,
                 row_len: 4,
-                rows: vec![words(&[5]), words(&[5]), words(&[3])],
-                owners: Some(vec![HERO, COMPANION, TRADER]),
+                rows: vec![words(&[5]), words(&[5]), words(&[3]), words(&[4])],
+                owners: Some(vec![HERO, COMPANION, TRADER, CAMPER]),
             },
             TableSpec {
                 name: tables::ENTITLED_LEVEL,
                 row_len: 4,
-                rows: vec![words(&[5]), words(&[5]), words(&[3])],
-                owners: Some(vec![HERO, COMPANION, TRADER]),
+                rows: vec![words(&[5]), words(&[5]), words(&[3]), words(&[4])],
+                owners: Some(vec![HERO, COMPANION, TRADER, CAMPER]),
             },
             TableSpec {
                 name: tables::STATS,
@@ -707,26 +1061,51 @@ pub mod build {
                     stats([8, 14, 16, 17, 10, 20]),
                     stats([18, 13, 15, 8, 12, 10]),
                     stats([10, 10, 10, 10, 10, 10]),
+                    stats([8, 13, 15, 17, 10, 12]),
                 ],
-                owners: Some(vec![HERO, COMPANION, TRADER]),
+                owners: Some(vec![HERO, COMPANION, TRADER, CAMPER]),
             },
-            // The hero has a character creation record; the companion does not.
+            // The hero and the companion at camp have a character creation record; the
+            // companion in the party does not.
             TableSpec {
                 name: tables::CREATION,
                 row_len: 88,
-                rows: vec![vec![0; 88]],
-                owners: Some(vec![HERO]),
+                rows: vec![vec![0; 88]; 2],
+                owners: Some(vec![HERO, CAMPER]),
             },
             TableSpec {
                 name: "test.v0.NameBytes",
-                row_len: 3,
-                rows: vec![b"Tav".to_vec()],
+                row_len: 4,
+                rows: vec![b"Tav\0".to_vec(), b"Gale".to_vec()],
                 owners: None,
             },
             TableSpec {
                 name: "test.v0.Allocations",
                 row_len: 4,
-                rows: [0, 0, 6, 7, 0, 2, 7].iter().map(|&p| words(&[p])).collect(),
+                rows: [0, 0, 6, 7, 0, 2, 7, 0, 0, 5, 6, 7, 2, 4]
+                    .iter()
+                    .map(|&p| words(&[p]))
+                    .collect(),
+                owners: None,
+            },
+            // The companion at camp rates the hero at 10; the one in the party has no
+            // rating yet.
+            TableSpec {
+                name: tables::APPROVAL,
+                row_len: 48,
+                rows: vec![vec![0; 48], vec![0xff; 48]],
+                owners: Some(vec![CAMPER, COMPANION]),
+            },
+            TableSpec {
+                name: "test.v0.ApprovalOf",
+                row_len: 8,
+                rows: vec![vec![0; 8]],
+                owners: None,
+            },
+            TableSpec {
+                name: "test.v0.ApprovalRatings",
+                row_len: 4,
+                rows: vec![words(&[10])],
                 owners: None,
             },
             TableSpec {
@@ -757,17 +1136,39 @@ pub mod build {
                 ],
                 owners: None,
             },
-            // Three stacks: the hero's loose gold, the gold in the hero's bag, the trader's.
+            // Four stacks: the hero's loose gold, the gold in the hero's bag, the trader's
+            // and the camp companion's.
             TableSpec {
                 name: tables::STACK_OF,
                 row_len: 8,
-                rows: vec![vec![0; 8]; 3],
-                owners: Some(vec![HERO_GOLD, BAGGED_GOLD, TRADER_GOLD]),
+                rows: vec![vec![0; 8]; 6],
+                owners: Some(vec![
+                    HERO_GOLD,
+                    BAGGED_GOLD,
+                    TRADER_GOLD,
+                    CAMPER_GOLD,
+                    POTIONS,
+                    APPLES,
+                ]),
+            },
+            // Each stack is a member of itself.
+            TableSpec {
+                name: "game.inventory.v0.StackMemberComponent",
+                row_len: 8,
+                rows: vec![vec![0; 8]; 6],
+                owners: Some(vec![
+                    HERO_GOLD,
+                    BAGGED_GOLD,
+                    TRADER_GOLD,
+                    CAMPER_GOLD,
+                    POTIONS,
+                    APPLES,
+                ]),
             },
             TableSpec {
                 name: tables::STACK,
                 row_len: 32,
-                rows: vec![vec![0; 32]; 3],
+                rows: vec![vec![0; 32]; 6],
                 owners: None,
             },
             TableSpec {
@@ -778,32 +1179,155 @@ pub mod build {
                     words(&[0x4d72_0000, 3385]),
                     words(&[0x4d72_0000, 371]),
                     words(&[0x4d72_0000, 500]),
+                    words(&[0x4d72_0000, 120]),
+                    words(&[0x4d72_0000, 3]),
+                    words(&[0x4d72_0000, 4]),
                 ],
                 owners: None,
             },
             TableSpec {
                 name: "test.v0.StackItems",
                 row_len: 8,
-                rows: vec![vec![0; 8]; 3],
+                rows: vec![vec![0; 8]; 6],
                 owners: None,
             },
             TableSpec {
                 name: tables::MEMBER,
                 row_len: 8,
-                rows: vec![vec![0; 8]; 5],
-                owners: Some(vec![HERO_GOLD, BAG, BAGGED_GOLD, TRADER_GOLD, ROPE]),
+                rows: vec![vec![0; 8]; 9],
+                owners: Some(ITEMS.to_vec()),
             },
             TableSpec {
                 name: tables::MEMBER_DATA,
                 row_len: 16,
-                rows: vec![vec![0; 16]; 5],
+                rows: vec![vec![0; 16]; 9],
                 owners: None,
             },
             TableSpec {
                 name: tables::INVENTORY_OWNER,
                 row_len: 8,
-                rows: vec![vec![0; 8]; 3],
-                owners: Some(vec![HERO_PACK, BAG_INSIDE, TRADER_PACK]),
+                rows: vec![vec![0; 8]; 5],
+                owners: Some(vec![
+                    HERO_PACK,
+                    BAG_INSIDE,
+                    TRADER_PACK,
+                    CAMPER_PACK,
+                    CHEST_INSIDE,
+                ]),
+            },
+            TableSpec {
+                name: tables::CAMP_CHEST,
+                row_len: 48,
+                rows: vec![vec![0; 48]],
+                owners: Some(vec![CHEST]),
+            },
+            // Each inventory's slot numbers and slot records, as the game keeps them.
+            TableSpec {
+                name: "game.inventory.v1.ContainerComponent",
+                row_len: 32,
+                rows: vec![vec![0; 32]; 5],
+                owners: Some(vec![
+                    HERO_PACK,
+                    BAG_INSIDE,
+                    TRADER_PACK,
+                    CAMPER_PACK,
+                    CHEST_INSIDE,
+                ]),
+            },
+            TableSpec {
+                name: "game.inventory.v0.ContainerSlotData",
+                row_len: 16,
+                rows: vec![words(&[0, 0, 0, 612]); 9],
+                owners: None,
+            },
+            // In the order the inventories list them: the hero's pack holds four, the
+            // trader's two, the others one each.
+            TableSpec {
+                name: "test.v0.SlotNumbers",
+                row_len: 2,
+                rows: [0u16, 1, 2, 3, 0, 0, 1, 0, 0]
+                    .iter()
+                    .map(|n| n.to_le_bytes().to_vec())
+                    .collect(),
+                owners: None,
+            },
+            TableSpec {
+                name: "test.v0.SlotRecords",
+                row_len: 8,
+                rows: vec![vec![0; 8]; 9],
+                owners: None,
+            },
+            // Every item has an item component; owners in entity order, as the game keeps
+            // them.
+            TableSpec {
+                name: tables::ITEM,
+                row_len: 1,
+                rows: vec![vec![0]; 9],
+                owners: Some(ITEMS.to_vec()),
+            },
+            // Who owns each item: its holder, or nobody for what is in the camp chest.
+            TableSpec {
+                name: "game.v0.OwneeCurrentComponent",
+                row_len: 8,
+                rows: vec![vec![0; 8]; 9],
+                owners: Some(ITEMS.to_vec()),
+            },
+            TableSpec {
+                name: "game.v2.OwneeHistoryComponent",
+                row_len: 24,
+                rows: vec![vec![0xff; 24]; 9],
+                owners: Some(ITEMS.to_vec()),
+            },
+            // What each character owns, in three lists the same.
+            TableSpec {
+                name: "game.v0.IsCurrentOwnerComponent",
+                row_len: 16,
+                rows: vec![vec![0; 16]; 3],
+                owners: Some(vec![HERO, TRADER, CAMPER]),
+            },
+            TableSpec {
+                name: "game.v0.IsLatestOwnerComponent",
+                row_len: 16,
+                rows: vec![vec![0; 16]; 3],
+                owners: Some(vec![HERO, TRADER, CAMPER]),
+            },
+            TableSpec {
+                name: "game.v0.IsOriginalOwnerComponent",
+                row_len: 16,
+                rows: vec![vec![0; 16]; 3],
+                owners: Some(vec![HERO, TRADER, CAMPER]),
+            },
+            TableSpec {
+                name: "test.v0.Owned",
+                row_len: 8,
+                rows: vec![vec![0; 8]; 8],
+                owners: None,
+            },
+            // Each holder's inventories, and its main one.
+            TableSpec {
+                name: "game.inventory.v0.OwnerComponent",
+                row_len: 24,
+                rows: vec![vec![0; 24]; 5],
+                owners: Some(vec![HERO, BAG, TRADER, CAMPER, CHEST]),
+            },
+            TableSpec {
+                name: "test.v0.Inventories",
+                row_len: 8,
+                rows: vec![vec![0; 8]; 5],
+                owners: None,
+            },
+            TableSpec {
+                name: "game.inventory.v0.WieldingComponent",
+                row_len: 8,
+                rows: vec![vec![0; 8]],
+                owners: Some(vec![TRADER_SWORD]),
+            },
+            // An apple is worth 3 camp supplies.
+            TableSpec {
+                name: tables::SUPPLY,
+                row_len: 4,
+                rows: vec![words(&[3])],
+                owners: Some(vec![APPLES]),
             },
         ];
         let mut data = NewAge::parse(blob(&entities, &specs)).unwrap();
@@ -818,30 +1342,47 @@ pub mod build {
         };
         let fixed = NewAge::parse(blob(&entities, &specs)).unwrap();
 
-        point(tables::CREATION, 0, 56, at(&fixed, "test.v0.NameBytes", 0));
-        point(tables::CREATION, 0, 64, 3);
-        point(
-            tables::CREATION,
-            0,
-            72,
-            at(&fixed, "test.v0.Allocations", 0),
-        );
-        point(
-            tables::CREATION,
-            0,
-            80,
-            at(&fixed, "test.v0.Allocations", 0) + 28,
-        );
+        // The hero is "Tav", the companion at camp "Gale"; each has seven allocations.
+        for (row, name_len) in [(0, 3), (1, 4)] {
+            point(
+                tables::CREATION,
+                row,
+                56,
+                at(&fixed, "test.v0.NameBytes", row),
+            );
+            point(tables::CREATION, row, 64, name_len);
+            let allocations = at(&fixed, "test.v0.Allocations", row * 7);
+            point(tables::CREATION, row, 72, allocations);
+            point(tables::CREATION, row, 80, allocations + 28);
+        }
+        let of = at(&fixed, "test.v0.ApprovalOf", 0);
+        point("test.v0.ApprovalOf", 0, 0, entity(&fixed, HERO));
+        point(tables::APPROVAL, 0, 0, of);
+        point(tables::APPROVAL, 0, 8, of + 8);
+        let ratings = at(&fixed, "test.v0.ApprovalRatings", 0);
+        point(tables::APPROVAL, 0, 16, ratings);
+        point(tables::APPROVAL, 0, 24, ratings + 4);
         // The party's resources are the first two entries, the hero's the third.
         let entries = at(&fixed, "test.v0.ResourceEntries", 0);
         point(tables::RESOURCES, 0, 0, entries);
         point(tables::RESOURCES, 0, 8, entries + 128);
         point(tables::RESOURCES, 1, 0, entries + 128);
         point(tables::RESOURCES, 1, 8, entries + 192);
-        for (stack, item) in [HERO_GOLD, BAGGED_GOLD, TRADER_GOLD]
-            .into_iter()
-            .enumerate()
-        {
+        let stacks = [
+            HERO_GOLD,
+            BAGGED_GOLD,
+            TRADER_GOLD,
+            CAMPER_GOLD,
+            POTIONS,
+            APPLES,
+        ];
+        for (stack, item) in stacks.into_iter().enumerate() {
+            point(
+                "game.inventory.v0.StackMemberComponent",
+                stack,
+                0,
+                entity(&fixed, item),
+            );
             point(tables::STACK_OF, stack, 0, at(&fixed, tables::STACK, stack));
             let items = at(&fixed, "test.v0.StackItems", stack);
             point("test.v0.StackItems", stack, 0, entity(&fixed, item));
@@ -851,14 +1392,132 @@ pub mod build {
             point(tables::STACK, stack, 16, entry);
             point(tables::STACK, stack, 24, entry + 8);
         }
-        let packs = [HERO_PACK, HERO_PACK, BAG_INSIDE, TRADER_PACK, HERO_PACK];
+        let packs = [
+            HERO_PACK,
+            HERO_PACK,
+            BAG_INSIDE,
+            TRADER_PACK,
+            HERO_PACK,
+            CAMPER_PACK,
+            HERO_PACK,
+            CHEST_INSIDE,
+            TRADER_PACK,
+        ];
+        let members = ITEMS;
+        // Slots counted per inventory, in the order the items are listed.
+        let mut slots: Vec<(u32, u32)> = Vec::new();
         for (row, pack) in packs.into_iter().enumerate() {
+            let slot = slots.iter().filter(|(p, _)| *p == pack).count() as u32;
+            slots.push((pack, slot));
             point(tables::MEMBER, row, 0, at(&fixed, tables::MEMBER_DATA, row));
             point(tables::MEMBER_DATA, row, 0, entity(&fixed, pack));
+            point(tables::MEMBER_DATA, row, 8, slot);
         }
-        for (row, owner) in [HERO, BAG, TRADER].into_iter().enumerate() {
+        // Each inventory's lists: its items' slot numbers, and records naming the items.
+        let mut record = 0;
+        for (row, pack) in [
+            HERO_PACK,
+            BAG_INSIDE,
+            TRADER_PACK,
+            CAMPER_PACK,
+            CHEST_INSIDE,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let first = record;
+            for (member, (p, slot)) in members.iter().zip(&slots) {
+                if *p != pack {
+                    continue;
+                }
+                let records = "test.v0.SlotRecords";
+                let slot_data = "game.inventory.v0.ContainerSlotData";
+                point(records, record, 0, at(&fixed, slot_data, record));
+                point(slot_data, record, 0, entity(&fixed, *member));
+                point(slot_data, record, 8, *slot);
+                record += 1;
+            }
+            let numbers = at(&fixed, "test.v0.SlotNumbers", first);
+            let records = at(&fixed, "test.v0.SlotRecords", first);
+            let count = (record - first) as u32;
+            let container = "game.inventory.v1.ContainerComponent";
+            point(container, row, 0, numbers);
+            point(container, row, 8, numbers + count * 2);
+            point(container, row, 16, records);
+            point(container, row, 24, records + count * 8);
+        }
+        for (row, owner) in [HERO, BAG, TRADER, CAMPER, CHEST].into_iter().enumerate() {
             point(tables::INVENTORY_OWNER, row, 0, entity(&fixed, owner));
         }
+        // Ownership: each item's owner, and what each character owns.
+        let owner_of = |item: u32| match item {
+            HERO_GOLD | BAG | BAGGED_GOLD | ROPE | POTIONS => Some(HERO),
+            TRADER_GOLD | TRADER_SWORD => Some(TRADER),
+            CAMPER_GOLD => Some(CAMPER),
+            _ => None,
+        };
+        for (row, item) in ITEMS.into_iter().enumerate() {
+            let history = "game.v2.OwneeHistoryComponent";
+            match owner_of(item) {
+                Some(owner) => {
+                    point(
+                        "game.v0.OwneeCurrentComponent",
+                        row,
+                        0,
+                        entity(&fixed, owner),
+                    );
+                    point(history, row, 0, entity(&fixed, owner));
+                    point(history, row, 4, 0);
+                    point(history, row, 8, entity(&fixed, owner));
+                    point(history, row, 12, 0);
+                }
+                None => {
+                    point("game.v0.OwneeCurrentComponent", row, 0, u32::MAX);
+                    point("game.v0.OwneeCurrentComponent", row, 4, u32::MAX);
+                }
+            }
+        }
+        let mut owned = 0;
+        for (row, owner) in [HERO, TRADER, CAMPER].into_iter().enumerate() {
+            let first = owned;
+            for item in ITEMS.into_iter().filter(|&i| owner_of(i) == Some(owner)) {
+                point("test.v0.Owned", owned, 0, entity(&fixed, item));
+                owned += 1;
+            }
+            let begin = at(&fixed, "test.v0.Owned", first);
+            let end = begin + (owned - first) as u32 * 8;
+            for name in [
+                "game.v0.IsCurrentOwnerComponent",
+                "game.v0.IsLatestOwnerComponent",
+                "game.v0.IsOriginalOwnerComponent",
+            ] {
+                point(name, row, 0, begin);
+                point(name, row, 8, end);
+            }
+        }
+        for (row, inventory) in [
+            HERO_PACK,
+            BAG_INSIDE,
+            TRADER_PACK,
+            CAMPER_PACK,
+            CHEST_INSIDE,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let list = at(&fixed, "test.v0.Inventories", row);
+            point("test.v0.Inventories", row, 0, entity(&fixed, inventory));
+            let owner = "game.inventory.v0.OwnerComponent";
+            point(owner, row, 0, list);
+            point(owner, row, 8, list + 8);
+            point(owner, row, 16, entity(&fixed, inventory));
+        }
+        point(
+            "game.inventory.v0.WieldingComponent",
+            0,
+            0,
+            entity(&fixed, TRADER),
+        );
         NewAge::parse(data.to_bytes()).unwrap()
     }
 }
@@ -871,7 +1530,7 @@ mod tests {
     #[test]
     fn reads_the_party() {
         let party = read(&sample_globals(), &sample_entities()).unwrap();
-        assert_eq!(party.characters.len(), 2);
+        assert_eq!(party.characters.len(), 3);
         assert_eq!(party.inspiration, Some(Inspiration { amount: 3, max: 4 }));
         assert_eq!(party.camp_supplies, Some(660));
         assert_eq!(party.gold_total(), 3756);
@@ -882,7 +1541,7 @@ mod tests {
         assert_eq!(hero.name.as_deref(), Some("Tav"));
         assert_eq!(
             (hero.level, hero.entitled_level, hero.experience),
-            (5, 5, 5595)
+            (5, 5, Some(5595))
         );
         assert_eq!(hero.abilities, [8, 14, 16, 17, 10, 20]);
         assert_eq!(hero.allocated, Some([0, 6, 7, 0, 2, 7]));
@@ -914,6 +1573,110 @@ mod tests {
         assert_eq!(companion.allocated, None);
         assert_eq!(companion.abilities, [18, 13, 15, 8, 12, 10]);
         assert!(companion.gold.is_empty());
+        assert!(hero.in_party() && companion.in_party());
+
+        // A companion at camp comes after the party. The game keeps no experience for
+        // them, and what they carry is not the party's gold.
+        let camper = &party.characters[2];
+        assert_eq!(camper.entity, uuid(CAMPER));
+        assert_eq!(camper.name.as_deref(), Some("Gale"));
+        assert!(!camper.in_party());
+        assert_eq!(
+            (camper.level, camper.entitled_level, camper.experience),
+            (4, 4, None)
+        );
+        assert_eq!(camper.allocated, Some([0, 5, 6, 7, 2, 4]));
+        assert_eq!(camper.gold_total(), 120);
+
+        // Approval is a companion's, of the player's character.
+        assert_eq!(
+            camper.approval,
+            [Approval {
+                of: uuid(HERO),
+                rating: 10
+            }]
+        );
+        assert!(hero.approval.is_empty());
+        assert!(companion.approval.is_empty(), "no rating yet");
+    }
+
+    #[test]
+    fn reads_what_each_holder_has_and_changes_a_stack() {
+        let globals = sample_globals();
+        let mut entities = sample_entities();
+        let party = read(&globals, &entities).unwrap();
+        // The hero and the camp chest. The companion at camp carries only gold, which is
+        // listed with the character, and the trader is nobody's.
+        let holders: Vec<Holder> = party.inventories.iter().map(|i| i.holder).collect();
+        assert_eq!(holders, [Holder::Character(0), Holder::CampChest]);
+        let names: Vec<(&str, u32, bool)> = party.inventories[0]
+            .items
+            .iter()
+            .map(|i| (i.stats.as_str(), i.amount, i.stacked))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("OBJ_Bag_AlchemyPouch", 1, false),
+                ("OBJ_Potion_Healing", 3, true),
+                ("OBJ_Rope", 1, false),
+            ]
+        );
+        let apples = &party.inventories[1].items[0];
+        assert_eq!(
+            (apples.stats.as_str(), apples.amount, apples.supply),
+            ("CONS_FOOD_Fruit_Apple", 4, Some(3))
+        );
+        // Only the rope is marked as wares.
+        let wares: Vec<&str> = party.inventories[0]
+            .items
+            .iter()
+            .filter(|i| i.wares)
+            .map(|i| i.stats.as_str())
+            .collect();
+        assert_eq!(wares, ["OBJ_Rope"]);
+
+        set_amount(&mut entities, uuid(POTIONS), 12).unwrap();
+        set_amount(&mut entities, uuid(APPLES), 40).unwrap();
+        assert!(
+            set_amount(&mut entities, uuid(ROPE), 2).is_err(),
+            "not a stack"
+        );
+        assert!(set_amount(&mut entities, uuid(POTIONS), 0).is_err());
+        let after = read(&globals, &NewAge::parse(entities.to_bytes()).unwrap()).unwrap();
+        assert_eq!(after.inventories[0].items[1].amount, 12);
+        assert_eq!(after.inventories[1].items[0].amount, 40);
+        assert_eq!(after.gold_total(), 3756, "gold is as it was");
+    }
+
+    #[test]
+    fn approval_can_be_set_below_zero() {
+        let globals = sample_globals();
+        let mut entities = sample_entities();
+        set_approval(&mut entities, uuid(CAMPER), uuid(HERO), -20).unwrap();
+        assert!(set_approval(&mut entities, uuid(COMPANION), uuid(HERO), 5).is_err());
+        let after = read(&globals, &NewAge::parse(entities.to_bytes()).unwrap()).unwrap();
+        assert_eq!(after.characters[2].approval[0].rating, -20);
+    }
+
+    #[test]
+    fn a_companion_at_camp_can_be_edited_except_for_experience() {
+        let globals = sample_globals();
+        let mut entities = sample_entities();
+        set_entitled_level(&mut entities, uuid(CAMPER), 5).unwrap();
+        set_allocated(&mut entities, uuid(CAMPER), 3, 9).unwrap();
+        set_gold(&mut entities, uuid(CAMPER_GOLD), 900).unwrap();
+        let error = set_experience(&mut entities, uuid(CAMPER), 5000).unwrap_err();
+        assert!(error.to_string().contains("not in the party"), "{error}");
+
+        let after = read(&globals, &NewAge::parse(entities.to_bytes()).unwrap()).unwrap();
+        let camper = &after.characters[2];
+        assert_eq!((camper.level, camper.entitled_level), (4, 5));
+        assert_eq!(camper.allocated, Some([0, 5, 6, 9, 2, 4]));
+        assert_eq!(camper.gold_total(), 900);
+        // The hero's record is beside it and is untouched.
+        assert_eq!(after.characters[0].allocated, Some([0, 6, 7, 0, 2, 7]));
+        assert_eq!(after.gold_total(), 3756);
     }
 
     #[test]
@@ -934,13 +1697,14 @@ mod tests {
         let hero = &after.characters[0];
         assert_eq!(
             (hero.experience, hero.entitled_level, hero.level),
-            (7100, 6, 5)
+            (Some(7100), 6, 5)
         );
         assert_eq!(hero.allocated, Some([7, 6, 7, 0, 2, 7]));
-        assert_eq!(
-            hero.abilities, before.characters[0].abilities,
-            "totals are the game's"
-        );
+        // Strength's score moves with its points, as the game will work it out; the others
+        // are as they were.
+        let mut expected = before.characters[0].abilities;
+        expected[0] += 7;
+        assert_eq!(hero.abilities, expected);
         // Loose gold is still listed first, however much the bag now holds.
         assert_eq!(
             (hero.gold[0].item, hero.gold[0].amount),

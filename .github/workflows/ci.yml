@@ -25,11 +25,30 @@ jobs:
       # Real saves are private, so the checks against them skip themselves here.
       - run: cargo test
 
+  # The user guide, docs/HOW-TO-USE.md, as a PDF to go in every download. Made on every push,
+  # so a change that breaks it shows at once.
+  guide:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install markdown==3.7
+      # Printed with the runner's own Chrome.
+      - run: python3 packaging/make-guide.py guide
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guide
+          path: guide/How to use Nautiloid.pdf
+          if-no-files-found: error
+          retention-days: 7
+
   # The app, to download from the run's page. Built for main, for version tags, when the
   # workflow is run by hand, and for any push whose commit message contains [build].
   build:
     name: Build (${{ matrix.name }})
-    needs: test
+    needs: [test, guide]
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.ref == 'refs/heads/main' ||
@@ -48,18 +67,23 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.97.0
-      - run: cargo build --release --locked --bin nautiloid-save-editor
+      # The editor, and the command-line tool for looking inside saves and game files.
+      - run: cargo build --release --locked --bins
+      - uses: actions/download-artifact@v4
+        with:
+          name: guide
+          path: guide
       - name: Gather the files
         shell: bash
         run: |
           mkdir -p upload files
-          cp LICENSE assets/fonts/OFL-*.txt files/
+          cp LICENSE assets/fonts/OFL-*.txt "guide/How to use Nautiloid.pdf" files/
           if [ "$RUNNER_OS" = Windows ]; then
-            cp target/release/nautiloid-save-editor.exe files/
+            cp target/release/nautiloid-save-editor.exe target/release/nautiloid-cli.exe files/
             mv files/* upload/
           else
-            # In an archive, so the file stays marked as a program.
-            cp target/release/nautiloid-save-editor files/
+            # In an archive, so the files stay marked as programs.
+            cp target/release/nautiloid-save-editor target/release/nautiloid-cli files/
             tar -czf "upload/nautiloid-save-editor-${{ matrix.name }}.tar.gz" \
               --transform 's,^files,nautiloid-save-editor,' files
           fi
@@ -74,7 +98,7 @@ jobs:
   # version tags and when asked for in a run by hand.
   build-macos:
     name: Build (macos-arm64)
-    needs: test
+    needs: [test, guide]
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'workflow_dispatch' && inputs.macos)
@@ -83,12 +107,17 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.97.0
       - run: cargo build --release --locked --bin nautiloid-save-editor
+      - uses: actions/download-artifact@v4
+        with:
+          name: guide
+          path: guide
       - name: Make the app bundle
         run: |
           app="Nautiloid Save Editor.app"
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" upload
           cp target/release/nautiloid-save-editor "$app/Contents/MacOS/"
           cp packaging/macos/Info.plist "$app/Contents/"
+          cp packaging/macos/icon.icns "$app/Contents/Resources/"
           cp LICENSE assets/fonts/OFL-*.txt "$app/Contents/Resources/"
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
           /usr/libexec/PlistBuddy \
@@ -98,7 +127,12 @@ jobs:
           # Signed for this machine only: enough to run, not enough to pass Gatekeeper
           # unasked.
           codesign --force --sign - "$app"
-          ditto -c -k --keepParent "$app" upload/nautiloid-save-editor-macos-arm64.zip
+          # The app and the guide, in one folder.
+          folder="Nautiloid Save Editor"
+          mkdir "$folder"
+          mv "$app" "$folder/"
+          cp "guide/How to use Nautiloid.pdf" "$folder/"
+          ditto -c -k --keepParent "$folder" upload/nautiloid-save-editor-macos-arm64.zip
       - uses: actions/upload-artifact@v4
         with:
           name: nautiloid-save-editor-macos-arm64

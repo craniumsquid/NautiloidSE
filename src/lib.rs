@@ -11,9 +11,12 @@
 //! * [`ui`]: the interface.
 //! * [`diff`]: what differs between two documents.
 
+pub mod catalog;
 pub mod diff;
+pub mod items;
 pub mod lsf;
 pub mod lspk;
+pub mod mods;
 pub mod newage;
 pub mod party;
 pub mod save;

@@ -1,14 +1,14 @@
 //! The Changes panel: every difference from the save as opened, each with its own way back,
 //! and the way out.
 
-use super::widgets::{self, grouped, Kind};
+use super::widgets::{self, Kind};
 use super::{theme, Action};
 use crate::session::Session;
 use eframe::egui::{self, Align, Frame, Layout, Margin, Rounding, Ui};
 
 fn number(text: &str) -> String {
-    text.parse::<u64>()
-        .map_or_else(|_| text.to_owned(), grouped)
+    text.parse::<i64>()
+        .map_or_else(|_| text.to_owned(), widgets::signed)
 }
 
 pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {

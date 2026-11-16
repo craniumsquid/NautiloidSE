@@ -5,16 +5,21 @@
 //! window, file dialogs and the system file manager are behind [`Platform`], which lets the
 //! tests drive the whole interface without a screen.
 
+pub mod approval;
 pub mod browser;
 pub mod changes;
 pub mod dialogs;
+pub mod game;
 pub mod info;
+pub mod inventory;
+pub mod mods;
 pub mod party;
 pub mod theme;
 pub mod thumbs;
 pub mod toast;
 pub mod widgets;
 
+use crate::party::Holder;
 use crate::saves::{self, Dropped};
 use crate::session::{Field, Session};
 use browser::BrowserState;
@@ -48,6 +53,9 @@ pub struct Options {
     pub detect: bool,
     /// A save to open straight away.
     pub open: Option<PathBuf>,
+    /// The game's `Data` folder, for the names players see. Without one, the game is looked
+    /// for if `detect` is set.
+    pub game_dir: Option<PathBuf>,
     /// The current time in seconds since 1970, fixed. For tests; normally the clock is read.
     pub now: Option<u64>,
 }
@@ -55,15 +63,36 @@ pub struct Options {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
     Party,
+    Inventory,
+    Approval,
+    Mods,
     Info,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 2] = [Tab::Party, Tab::Info];
+    pub const ALL: [Tab; 5] = [
+        Tab::Party,
+        Tab::Inventory,
+        Tab::Approval,
+        Tab::Mods,
+        Tab::Info,
+    ];
+
+    /// The tab a field is edited on.
+    pub fn of(field: Field) -> Tab {
+        match field {
+            Field::Approval(..) => Tab::Approval,
+            Field::Amount(..) | Field::Add(..) => Tab::Inventory,
+            _ => Tab::Party,
+        }
+    }
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Party => "Party",
+            Tab::Inventory => "Inventory",
+            Tab::Approval => "Approval",
+            Tab::Mods => "Mods",
             Tab::Info => "Save info",
         }
     }
@@ -81,7 +110,7 @@ pub enum Action {
     SetFolder(PathBuf),
     SelectCampaign(String),
     Tab(Tab),
-    Set(Field, u32),
+    Set(Field, i32),
     Revert(Field),
     RevertAll,
     Undo,
@@ -95,6 +124,12 @@ pub enum Action {
     Discard,
     CloseDialog,
     Reveal(PathBuf),
+    /// Ask where the game is, for the names players see.
+    PickGameFolder,
+    /// Choose items from the game's to add for this holder, the search starting with this.
+    AskAddItem(Holder, String),
+    /// Add one more of the item with these stats for this holder.
+    AddItem(Holder, String),
 }
 
 pub struct EditorApp {
@@ -109,6 +144,8 @@ pub struct EditorApp {
     dialog: Option<Dialog>,
     toasts: Toasts,
     thumbs: Thumbnails,
+    /// The game's own files, for the names players see.
+    game: game::GameFiles,
     /// Set once the person has agreed to close with changes unexported.
     allow_close: bool,
 }
@@ -122,6 +159,15 @@ impl EditorApp {
             None => (None, false),
         };
         let detected = detected && dir.is_some();
+        let game_dir = match options.game_dir {
+            Some(dir) => Some(dir),
+            None if options.detect => crate::catalog::detect_game(),
+            None => None,
+        };
+        let game = match game_dir {
+            Some(dir) => game::GameFiles::start(dir),
+            None => game::GameFiles::Missing,
+        };
         let mut app = EditorApp {
             platform,
             fixed_now: options.now,
@@ -133,6 +179,7 @@ impl EditorApp {
             dialog: None,
             toasts: Toasts::default(),
             thumbs: Thumbnails::new(ctx),
+            game,
             allow_close: false,
         };
         if let Some(path) = options.open {
@@ -174,7 +221,7 @@ impl EditorApp {
 
     /// Whether anything is still loading in the background. Tests wait for this.
     pub fn is_settled(&self) -> bool {
-        self.thumbs.is_idle()
+        self.thumbs.is_idle() && !self.game.is_loading()
     }
 
     /// Whether the window may close: nothing is unexported, or the person said to go ahead.
@@ -189,6 +236,15 @@ impl EditorApp {
     /// Draws one frame and applies what the person did in it.
     pub fn update(&mut self, ctx: &Context) {
         self.thumbs.poll(ctx);
+        if let Some(catalog) = self.game.poll() {
+            if let Some(session) = self.session.as_mut() {
+                session.set_catalog(catalog);
+            }
+        }
+        if self.game.is_loading() {
+            // Keep looking until the names arrive.
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         let mut actions = Vec::new();
         self.handle_close_request(ctx);
         if self.dialog.is_none() {
@@ -373,9 +429,9 @@ impl EditorApp {
                 );
                 ui.add_enabled_ui(!modal, |ui| {
                     ui.spacing_mut().item_spacing.y = 4.0;
-                    let changes = session.changes().len();
+                    let changes = session.changes();
                     for tab in Tab::ALL {
-                        let count = if tab == Tab::Party { changes } else { 0 };
+                        let count = changes.iter().filter(|c| Tab::of(c.field) == tab).count();
                         if tab_button(ui, tab.label(), self.tab == tab, count).clicked() {
                             actions.push(Action::Tab(tab));
                         }
@@ -383,6 +439,7 @@ impl EditorApp {
                     ui.add_space(14.0);
                     save_card(ui, session, &mut self.thumbs);
                     ui.add_space(10.0);
+                    let changes = changes.len();
                     if changes > 0 {
                         ui.label(
                             egui::RichText::new(format!(
@@ -463,6 +520,11 @@ impl EditorApp {
                                     })
                                     .show(ui, |ui| match self.tab {
                                         Tab::Party => party::show(ui, session, actions),
+                                        Tab::Inventory => {
+                                            inventory::show(ui, session, &self.game, actions)
+                                        }
+                                        Tab::Approval => approval::show(ui, session, actions),
+                                        Tab::Mods => mods::show(ui, session),
                                         Tab::Info => info::show(ui, session, now),
                                     });
                             });
@@ -489,7 +551,10 @@ impl EditorApp {
 
     fn open_save(&mut self, folder: &Path) {
         match Session::open(folder) {
-            Ok(session) => {
+            Ok(mut session) => {
+                if let Some(catalog) = self.game.catalog() {
+                    session.set_catalog(catalog);
+                }
                 self.session = Some(session);
                 self.tab = Tab::Party;
                 self.dialog = None;
@@ -544,6 +609,22 @@ impl EditorApp {
             Action::Refresh => {
                 self.browser.scan();
                 self.thumbs.clear();
+            }
+            Action::PickGameFolder => {
+                let picked = self.platform.pick_folder(
+                    "Choose the game's folder (Baldurs Gate 3, or its Data folder)",
+                    None,
+                );
+                if let Some(picked) = picked {
+                    match game::data_folder(&picked) {
+                        Some(data) => self.game = game::GameFiles::start(data),
+                        None => self.toasts.push(Toast::new(
+                            "That folder doesn't hold the game's files. Choose the Baldurs \
+                             Gate 3 folder, or the Data folder inside it.",
+                            Tone::Problem,
+                        )),
+                    }
+                }
             }
             Action::PickFolder => {
                 let start = self.browser.dir.clone();
@@ -612,6 +693,16 @@ impl EditorApp {
                 }
             }
             Action::CloseDialog => self.dialog = None,
+            Action::AskAddItem(holder, query) => {
+                self.dialog = Some(Dialog::AddItem { holder, query })
+            }
+            Action::AddItem(holder, stats) => {
+                if let Some(session) = &mut self.session {
+                    if let Err(why) = session.add_item(holder, &stats, time) {
+                        self.toasts.push(Toast::new(why, Tone::Problem));
+                    }
+                }
+            }
             Action::Reveal(path) => self.platform.reveal(&path),
         }
     }

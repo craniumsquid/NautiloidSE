@@ -197,10 +197,11 @@ fn entity_data_parses_and_matches_the_summary() {
         let entities = NewAge::from_lsf(&globals).unwrap();
         let read = party::read(&globals, &entities)
             .unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
+        // Companions at camp have no experience and are not in the summary.
         let mut found: Vec<(u32, u64)> = read
             .characters
             .iter()
-            .map(|c| (c.level, c.experience as u64))
+            .filter_map(|c| Some((c.level, c.experience? as u64)))
             .collect();
         let mut expected: Vec<(u32, u64)> = save
             .info()
@@ -241,7 +242,10 @@ fn party_edits_read_back_from_a_written_save() {
         let first = &before.characters[0];
 
         // One of each edit, on the first character.
-        party::set_experience(&mut entities, first.entity, first.experience + 123).unwrap();
+        let experience = first
+            .experience
+            .expect("the first character is in the party");
+        party::set_experience(&mut entities, first.entity, experience + 123).unwrap();
         party::set_entitled_level(&mut entities, first.entity, first.level + 1).unwrap();
         let points = first.allocated.unwrap()[0];
         party::set_allocated(&mut entities, first.entity, 0, points + 1).unwrap();
@@ -272,9 +276,11 @@ fn party_edits_read_back_from_a_written_save() {
         let after = party::read(&globals, &entities).unwrap();
 
         let mut expected = before.clone();
-        expected.characters[0].experience += 123;
+        expected.characters[0].experience = Some(experience + 123);
         expected.characters[0].entitled_level += 1;
         expected.characters[0].allocated.as_mut().unwrap()[0] += 1;
+        // The score moves with the points, as the game will work it out.
+        expected.characters[0].abilities[0] += 1;
         if let Some(stack) = gold {
             for c in &mut expected.characters {
                 for g in &mut c.gold {
@@ -398,4 +404,73 @@ fn a_session_exports_a_real_save_that_reopens_with_its_changes() {
         std::fs::remove_dir_all(&exported).unwrap();
     }
     std::fs::remove_dir_all(&out).unwrap();
+}
+
+#[test]
+fn an_item_copied_into_an_inventory_reads_back_once_more() {
+    use nautiloid_save_editor::items;
+    for path in saves() {
+        let save = Save::open(&path).unwrap();
+        if save.support() != Support::Editable {
+            continue;
+        }
+        let mut globals = save.lsf(save::GLOBALS).unwrap();
+        let mut entities = NewAge::from_lsf(&globals).unwrap();
+        let before = party::read(&globals, &entities).unwrap();
+        // The first item that can be copied; and anything that can't is refused.
+        let copyable = |i: &party::Item| {
+            let index = entities.entity_index(i.entity).unwrap();
+            items::why_not_copied(&entities, index).is_none()
+        };
+        let Some((holder, item)) = before.inventories.iter().find_map(|inventory| {
+            let item = inventory.items.iter().find(|i| copyable(i))?;
+            Some((inventory.holder, item.clone()))
+        }) else {
+            continue;
+        };
+        let refused = before
+            .inventories
+            .iter()
+            .flat_map(|i| &i.items)
+            .find(|i| !copyable(i))
+            .cloned();
+        if let Some(refused) = refused {
+            let mut globals = globals.clone();
+            let mut entities = entities.clone();
+            assert!(items::copy_item(&mut globals, &mut entities, refused.entity).is_err());
+        }
+        let copy = items::copy_item(&mut globals, &mut entities, item.entity)
+            .unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
+        entities.store(&mut globals).unwrap();
+
+        // Written out and read again.
+        let globals = Lsf::parse(&globals.write().unwrap()).unwrap();
+        let entities = NewAge::from_lsf(&globals).unwrap();
+        let after = party::read(&globals, &entities).unwrap();
+        let held = |party: &party::Party| {
+            party
+                .inventories
+                .iter()
+                .find(|i| i.holder == holder)
+                .map(|i| i.items.clone())
+                .unwrap_or_default()
+        };
+        let (old, new) = (held(&before), held(&after));
+        assert_eq!(new.len(), old.len() + 1, "{}", path.display());
+        let added = new
+            .iter()
+            .find(|i| i.entity == copy)
+            .expect("the copy is held");
+        assert_eq!(added.stats, item.stats, "{}", path.display());
+        assert_eq!(after.characters, before.characters, "{}", path.display());
+        let others = |party: &party::Party| {
+            party
+                .inventories
+                .iter()
+                .filter(|i| i.holder != holder)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(others(&after), others(&before), "{}", path.display());
+    }
 }

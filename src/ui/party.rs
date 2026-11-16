@@ -23,8 +23,32 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
     shared(ui, session, actions);
     ui.add_space(8.0);
 
+    // The party, then the companions waiting at camp.
+    let characters = &session.party().characters;
+    let (party, camp): (Vec<usize>, Vec<usize>) = session
+        .order()
+        .iter()
+        .partition(|&&index| characters[index].in_party());
+    cards(ui, session, &party, actions);
+    if !camp.is_empty() {
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new("At camp").font(theme::display(22.0)));
+        ui.label(
+            egui::RichText::new(
+                "Companions who are not in the party. They have no experience of their own to \
+                 change: the game awards it when they join, to match the party.",
+            )
+            .color(theme::MUTED),
+        );
+        ui.add_space(8.0);
+        cards(ui, session, &camp, actions);
+    }
+}
+
+/// A card for each character, two abreast where there is room.
+fn cards(ui: &mut Ui, session: &Session, characters: &[usize], actions: &mut Vec<Action>) {
     if ui.available_width() >= TWO_COLUMNS_FROM {
-        for pair in session.order().chunks(2) {
+        for pair in characters.chunks(2) {
             ui.columns(2, |columns| {
                 for (column, &index) in columns.iter_mut().zip(pair) {
                     character_card(column, session, index, actions);
@@ -33,7 +57,7 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
             ui.add_space(8.0);
         }
     } else {
-        for &index in session.order() {
+        for &index in characters {
             character_card(ui, session, index, actions);
             ui.add_space(8.0);
         }
@@ -41,11 +65,11 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
 }
 
 /// A stepper for `field` with a button to put it back when it has changed.
-fn field_stepper(
+pub fn field_stepper(
     ui: &mut Ui,
     session: &Session,
     field: Field,
-    step: u32,
+    step: i32,
     width: f32,
     actions: &mut Vec<Action>,
 ) {
@@ -58,7 +82,7 @@ fn field_stepper(
     }
     if changed {
         let original = session.original_value(field).unwrap_or(value);
-        let tip = format!("Put back {}", grouped(original as u64));
+        let tip = format!("Put back {}", widgets::signed(original as i64));
         if widgets::icon_button(ui, "⟲", &tip).clicked() {
             actions.push(Action::Revert(field));
         }
@@ -104,7 +128,9 @@ fn shared(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
             widgets::row(
                 ui,
                 "Camp supplies",
-                Some("Worked out by the game from the food you carry, so it can't be set here."),
+                Some(
+                    "Worked out by the game from your food. Change the food on the Inventory tab.",
+                ),
                 |ui| {
                     ui.label(
                         egui::RichText::new(grouped(supplies as u64))
@@ -130,7 +156,9 @@ fn subtitle(session: &Session, index: usize, character: &Character) -> String {
                 .join(" / ")
         })
         .unwrap_or_default();
-    if classes.is_empty() {
+    if !character.in_party() {
+        format!("Level {} · At camp", character.level)
+    } else if classes.is_empty() {
         format!("Level {}", character.level)
     } else {
         format!("Level {} · {classes}", character.level)
@@ -152,19 +180,21 @@ fn character_card(ui: &mut Ui, session: &Session, index: usize, actions: &mut Ve
         });
         ui.add_space(4.0);
 
-        widgets::row(
-            ui,
-            "Experience",
-            Some("The total. The game shows experience into the current level."),
-            |ui| field_stepper(ui, session, Field::Experience(index), 100, 84.0, actions),
-        );
+        if character.in_party() {
+            widgets::row(
+                ui,
+                "Experience",
+                Some("The total. The game shows experience into the current level."),
+                |ui| field_stepper(ui, session, Field::Experience(index), 100, 84.0, actions),
+            );
+        }
         let offered = session.value(Field::LevelUps(index)).unwrap_or(0);
         let hint = match offered {
             0 => "The game takes you through the choices for each one.".to_owned(),
             n => format!(
                 "The game will offer level {}.",
                 (1..=n)
-                    .map(|i| (character.level + i).to_string())
+                    .map(|i| (character.level as i32 + i).to_string())
                     .collect::<Vec<_>>()
                     .join(", then ")
             ),
@@ -186,9 +216,9 @@ fn character_card(ui: &mut Ui, session: &Session, index: usize, actions: &mut Ve
                     .color(theme::MUTED),
                 );
                 for (ability, name) in party::ABILITIES.iter().enumerate() {
-                    // The score the game will show: its current total, moved by however far
-                    // the points have moved.
-                    let total = character.abilities[ability] as i64 + allocated[ability] as i64
+                    // The score the game will show: the total in the save as opened, moved
+                    // by however far the points have moved.
+                    let total = original.abilities[ability] as i64 + allocated[ability] as i64
                         - before[ability] as i64;
                     let moved = allocated[ability] != before[ability];
                     ui.horizontal(|ui| {

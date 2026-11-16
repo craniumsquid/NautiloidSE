@@ -3,6 +3,7 @@
 
 use crate::lsf::{Header, Lsf, Sections};
 use crate::lspk::Package;
+use crate::value::Value;
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use serde_json::Value as Json;
 use std::path::{Path, PathBuf};
@@ -222,6 +223,35 @@ impl Save {
 ///
 /// So the new folder is `<prefix>__<name>`, with the source's prefix, holding `<name>.lsv` and
 /// the source's screenshot as `<name>.WebP`. Nothing is overwritten.
+/// The save type `meta.lsf` gives a save: 0 manual, 1 quick, 2 auto, 3 Honour Mode.
+pub fn save_type(package: &Package) -> Result<Option<i64>> {
+    let meta = Lsf::parse(&package.read_file(META)?).context(META)?;
+    Ok(meta
+        .find(&["MetaData", "MetaData"])
+        .and_then(|root| meta.get(root, "SaveGameType"))
+        .and_then(|v| v.as_i64()))
+}
+
+/// Makes a quicksave or autosave a manual save, as an export is the player's own save. The
+/// game shows its own quicksaves and autosaves by a label of its own rather than their
+/// names, and replaces them in turn. An Honour Mode save is left as it is. Returns whether
+/// anything changed.
+pub fn as_manual_save(package: &mut Package) -> Result<bool> {
+    let mut meta = Lsf::parse(&package.read_file(META)?).context(META)?;
+    let Some(attr) = meta
+        .find(&["MetaData", "MetaData"])
+        .and_then(|root| meta.attr(root, "SaveGameType"))
+    else {
+        return Ok(false);
+    };
+    if !matches!(meta.value(attr)?, Value::Byte(1 | 2)) {
+        return Ok(false);
+    }
+    meta.set_value(attr, &Value::Byte(0))?;
+    package.replace(META, &meta.write()?)?;
+    Ok(true)
+}
+
 pub fn export_copy(source: &Save, package: &Package, parent: &Path, name: &str) -> Result<PathBuf> {
     ensure!(
         !name.is_empty()

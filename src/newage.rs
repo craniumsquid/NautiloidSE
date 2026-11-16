@@ -45,12 +45,19 @@
 //! one per row of that table: row `i` belongs to entity `owners[i]`. Tables without a slot are
 //! not components; their rows are pointed at from other rows.
 //!
-//! Only edits that keep a row's size are supported: they overwrite bytes in place and leave
-//! every offset valid. The checksum is recomputed whenever the blob is written out.
+//! After the owner map comes loose data that rows point at: names, arrays of numbers,
+//! approval lists. The game follows these offsets wherever they lead, so this is not part of
+//! any table.
+//!
+//! Edits never move what is already there. A value is overwritten in place; anything new
+//! (an entity, a row, an array) is appended to the end of the data section and pointed at,
+//! and a table or list that grows is copied to the end whole, with its record repointed. The
+//! old copy stays where it was, so every offset that pointed into it still reads the same
+//! bytes. The checksum is recomputed whenever the blob is written out.
 
 use crate::lsf::{AttrId, Lsf};
 use crate::value::Uuid;
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use std::collections::HashMap;
 
 pub const MAGIC: &[u8; 4] = b"LSMF";
@@ -152,6 +159,8 @@ pub struct Table {
     start: usize,
     /// Where the row owners' entity indices are in the blob, for a component table.
     owners: Option<usize>,
+    /// Where the table's slot in the owner map is in the blob, for a component table.
+    slot: Option<usize>,
 }
 
 impl Table {
@@ -168,9 +177,12 @@ pub struct NewAge {
     bytes: Vec<u8>,
     tables: Vec<Table>,
     by_name: HashMap<String, TableId>,
-    entities: TableId,
-    /// Rows at the start of the entity table that are the entity list.
+    /// Where the entity list is in the blob. As the game writes it, the start of the entity
+    /// table; after an entity is added, a copy at the end of the data section.
+    entity_list: usize,
     entity_count: usize,
+    /// Where the `core.v0.Level` row is in the blob.
+    level_row: usize,
     by_entity: HashMap<[u8; 16], u32>,
 }
 
@@ -250,6 +262,7 @@ impl NewAge {
                 rows,
                 start: HEADER_LEN + offset,
                 owners: None,
+                slot: None,
             });
         }
 
@@ -272,14 +285,12 @@ impl NewAge {
         let entity_end = usize::try_from(u64_at(&bytes, level_row + 8)).context("entity list")?;
         let map_offset = usize::try_from(u64_at(&bytes, level_row + 16)).context("owner map")?;
         let map_end = usize::try_from(u64_at(&bytes, level_row + 24)).context("owner map")?;
-        ensure!(
-            HEADER_LEN + entity_offset == tables[entities].start,
-            "{LEVEL_TABLE} doesn't point at {ENTITY_TABLE}"
-        );
+        // The game writes the list at the start of the entity table; this editor moves it
+        // to the end of the data section to add to it.
         ensure!(
             entity_end >= entity_offset
                 && (entity_end - entity_offset).is_multiple_of(16)
-                && (entity_end - entity_offset) / 16 <= tables[entities].rows,
+                && entity_end <= data.len(),
             "the entity list is not where {LEVEL_TABLE} says"
         );
         ensure!(
@@ -290,7 +301,7 @@ impl NewAge {
         );
 
         let entity_count = (entity_end - entity_offset) / 16;
-        for slot in data[map_offset..map_end].chunks_exact(SLOT_LEN) {
+        for (slot_index, slot) in data[map_offset..map_end].chunks_exact(SLOT_LEN).enumerate() {
             let begin = u64_at(slot, 0);
             if begin == u64::MAX {
                 continue;
@@ -317,10 +328,11 @@ impl NewAge {
                 );
             }
             entry.owners = Some(HEADER_LEN + begin);
+            entry.slot = Some(HEADER_LEN + map_offset + slot_index * SLOT_LEN);
         }
 
         let mut by_entity = HashMap::with_capacity(entity_count);
-        let start = tables[entities].start;
+        let start = HEADER_LEN + entity_offset;
         for i in 0..entity_count {
             let mut id = [0u8; 16];
             id.copy_from_slice(&bytes[start + i * 16..start + i * 16 + 16]);
@@ -336,8 +348,9 @@ impl NewAge {
             bytes,
             tables,
             by_name,
-            entities,
+            entity_list: start,
             entity_count,
+            level_row,
             by_entity,
         };
         ensure!(
@@ -371,14 +384,10 @@ impl NewAge {
     }
 
     /// The entity whose identifier sits at data-section offset `offset`. This is how a row
-    /// refers to an entity: with an offset into the entity table.
+    /// refers to an entity: with an offset to a copy of its identifier, which the game keeps
+    /// in the entity table and this editor appends for an entity it adds.
     pub fn entity_at(&self, offset: u64) -> Option<u32> {
-        let (table, row, within) = self.locate(offset)?;
-        if table != self.entities || within != 0 {
-            return None;
-        }
-        let mut id = [0u8; 16];
-        id.copy_from_slice(self.row(table, row));
+        let id: [u8; 16] = self.data(offset, 16).ok()?.try_into().ok()?;
         self.by_entity.get(&id).copied()
     }
 
@@ -437,6 +446,35 @@ impl NewAge {
         Ok((id, &self.tables[id]))
     }
 
+    /// Where the entity list is, as data-section offsets: start and end.
+    pub fn entity_list_offset(&self) -> (u64, u64) {
+        let start = (self.entity_list - HEADER_LEN) as u64;
+        (start, start + self.entity_count as u64 * 16)
+    }
+
+    /// The whole data section, for finding offsets in it.
+    pub fn data_section(&self) -> &[u8] {
+        &self.bytes[HEADER_LEN..HEADER_LEN + self.data_len()]
+    }
+
+    /// Of `offsets`, those that no eight bytes anywhere in the data section hold: nothing can
+    /// be pointing at them.
+    pub fn unreferenced(&self, offsets: &[u64]) -> Vec<u64> {
+        let mut left: std::collections::HashSet<u64> = offsets.iter().copied().collect();
+        let data = self.data_section();
+        for window in data.windows(8) {
+            if left.is_empty() {
+                break;
+            }
+            left.remove(&u64::from_le_bytes(window.try_into().unwrap_or([0; 8])));
+        }
+        offsets
+            .iter()
+            .copied()
+            .filter(|o| left.contains(o))
+            .collect()
+    }
+
     pub fn entity_count(&self) -> usize {
         self.entity_count
     }
@@ -444,9 +482,123 @@ impl NewAge {
     /// The identifier of the entity at `index`.
     pub fn entity_id(&self, index: u32) -> Uuid {
         assert!((index as usize) < self.entity_count, "no entity {index}");
+        let at = self.entity_list + index as usize * 16;
         let mut id = [0u8; 16];
-        id.copy_from_slice(self.row(self.entities, index as usize));
+        id.copy_from_slice(&self.bytes[at..at + 16]);
         Uuid(id)
+    }
+
+    /// The length of the data section.
+    fn data_len(&self) -> usize {
+        u64_at(&self.bytes, 16) as usize
+    }
+
+    /// Where table `table`'s directory record is in the blob.
+    fn record_at(&self, table: TableId) -> usize {
+        HEADER_LEN + self.data_len() + u32_at(&self.bytes, 32) as usize + table * RECORD_LEN
+    }
+
+    fn put_u64(&mut self, at: usize, value: u64) {
+        self.bytes[at..at + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    /// Adds bytes to the end of the data section, eight-aligned, and returns their offset.
+    /// Nothing points at them until a row is made to.
+    pub fn append(&mut self, data: &[u8]) -> u64 {
+        let end = HEADER_LEN + self.data_len();
+        let padding = (8 - self.data_len() % 8) % 8;
+        let mut insert = vec![0u8; padding];
+        insert.extend_from_slice(data);
+        self.bytes.splice(end..end, insert.iter().copied());
+        let offset = (self.data_len() + padding) as u64;
+        let new_len = self.data_len() + insert.len();
+        self.put_u64(16, new_len as u64);
+        offset
+    }
+
+    /// Adds entities to the end of the entity list and returns their indices. The list is
+    /// copied to the end of the data section with the new identifiers after it, and the
+    /// `core.v0.Level` row is pointed at the copy.
+    pub fn add_entities(&mut self, ids: &[Uuid]) -> Result<Vec<u32>> {
+        for id in ids {
+            ensure!(
+                !self.by_entity.contains_key(&id.0),
+                "an entity {id} is already in the save"
+            );
+        }
+        let mut list =
+            self.bytes[self.entity_list..self.entity_list + self.entity_count * 16].to_vec();
+        for id in ids {
+            list.extend_from_slice(&id.0);
+        }
+        let offset = self.append(&list);
+        let level = self.level_row;
+        self.put_u64(level, offset);
+        self.put_u64(level + 8, offset + list.len() as u64);
+        self.entity_list = HEADER_LEN + offset as usize;
+        let first = self.entity_count as u32;
+        for (i, id) in ids.iter().enumerate() {
+            self.by_entity.insert(id.0, first + i as u32);
+        }
+        self.entity_count += ids.len();
+        Ok((first..first + ids.len() as u32).collect())
+    }
+
+    /// Adds a row to a table and returns its index. A component table's row needs the entity
+    /// it belongs to; a table of data that rows point at takes none. The table, and its
+    /// owner list, are copied to the end of the data section with the new entry after them,
+    /// and its directory record and owner map slot are pointed at the copies.
+    pub fn add_row(&mut self, table: TableId, owner: Option<u32>, row: &[u8]) -> Result<usize> {
+        let t = &self.tables[table];
+        ensure!(
+            row.len() == t.row_len,
+            "{}: a row is {} bytes",
+            t.name,
+            t.row_len
+        );
+        ensure!(
+            owner.is_some() == t.is_component(),
+            "{}: a row needs an owner exactly when the table is a component",
+            t.name
+        );
+        if let Some(owner) = owner {
+            ensure!((owner as usize) < self.entity_count, "no entity {owner}");
+        }
+        self.copy_table(table, Some((owner, row)))
+    }
+
+    /// Copies a table, and its owner list, to the end of the data section and points its
+    /// record and owner map slot at the copies. Nothing else changes.
+    pub fn move_table(&mut self, table: TableId) -> Result<()> {
+        self.copy_table(table, None).map(|_| ())
+    }
+
+    fn copy_table(&mut self, table: TableId, extra: Option<(Option<u32>, &[u8])>) -> Result<usize> {
+        let t = self.tables[table].clone();
+        let added = extra.is_some() as usize;
+        let mut rows = self.bytes[t.start..t.start + t.rows * t.row_len].to_vec();
+        if let Some((_, row)) = extra {
+            rows.extend_from_slice(row);
+        }
+        let offset = self.append(&rows);
+        let record = self.record_at(table);
+        self.put_u64(record + 32, (t.rows + added) as u64);
+        self.put_u64(record + 40, offset);
+        self.tables[table].start = HEADER_LEN + offset as usize;
+        self.tables[table].rows = t.rows + added;
+
+        if let (Some(owners), Some(slot)) = (t.owners, t.slot) {
+            let mut list = self.bytes[owners..owners + t.rows * 4].to_vec();
+            if let Some((Some(owner), _)) = extra {
+                list.extend_from_slice(&owner.to_le_bytes());
+            }
+            let offset = self.append(&list);
+            self.put_u64(slot, offset);
+            self.put_u64(slot + 8, offset + list.len() as u64);
+            self.put_u64(slot + 24, (t.rows + added) as u64);
+            self.tables[table].owners = Some(HEADER_LEN + offset as usize);
+        }
+        Ok(t.rows)
     }
 
     /// The index of the entity with this identifier.
@@ -570,9 +722,7 @@ impl NewAge {
     pub fn store(&self, lsf: &mut Lsf) -> Result<()> {
         let attr =
             NewAge::attribute(lsf).ok_or_else(|| anyhow!("the document has no NewAge data"))?;
-        if lsf.attr_bytes(attr).len() != self.bytes.len() {
-            bail!("the NewAge data changed size");
-        }
+        // A blob that grew takes new room in the document's values.
         lsf.set_bytes(attr, &self.to_bytes())
     }
 }
@@ -613,19 +763,22 @@ pub mod build {
         record(LEVEL_TABLE, 32, 1, level_at);
         data.resize(level_at + 32, 0);
         let entities_at = data.len();
+        // After the list, the table holds references to entities, and rows nothing
+        // points at, as the game's does.
+        const SPARE: usize = 31;
         record(
             ENTITY_TABLE,
             16,
-            entities.len() + usize::from(!entities.is_empty()),
+            entities.len() + usize::from(!entities.is_empty()) * (1 + SPARE),
             entities_at,
         );
         for id in entities {
             data.extend_from_slice(id);
         }
         let entities_end = data.len();
-        // After the list, the table holds references to entities; repeat the first one.
         if let Some(first) = entities.first() {
             data.extend_from_slice(first);
+            data.extend(std::iter::repeat_n(0u8, SPARE * 16));
         }
         for table in tables {
             record(table.name, table.row_len, table.rows.len(), data.len());
@@ -718,6 +871,47 @@ mod tests {
                 },
             ],
         )
+    }
+
+    #[test]
+    fn adds_entities_and_rows_without_moving_anything() {
+        let mut blob = NewAge::parse(sample()).unwrap();
+        let experience = blob.table(EXPERIENCE).unwrap();
+        let strings = blob.table("core.v0.TranslatedString").unwrap();
+        let old_rows = blob.row_offset(experience, 0) as u64 - HEADER_LEN as u64;
+        let before = blob.data(old_rows, 24).unwrap().to_vec();
+
+        let added = blob.add_entities(&[Uuid([7; 16])]).unwrap();
+        assert_eq!(added, [3]);
+        let row = [7100u32.to_le_bytes(), 7100u32.to_le_bytes(), [0; 4]].concat();
+        assert_eq!(blob.add_row(experience, Some(3), &row).unwrap(), 2);
+        assert_eq!(blob.add_row(strings, None, &[5; 4]).unwrap(), 1);
+        // The wrong kind of row is refused.
+        assert!(blob.add_row(experience, None, &row).is_err());
+        assert!(blob.add_row(strings, Some(0), &[5; 4]).is_err());
+        assert!(blob.add_row(experience, Some(9), &row).is_err());
+        assert!(
+            blob.add_entities(&[Uuid([2; 16])]).is_err(),
+            "already there"
+        );
+        let pointed = blob.append(&Uuid([3; 16]).0);
+
+        // Written out and read again, as an export does.
+        let blob = NewAge::parse(blob.to_bytes()).unwrap();
+        assert_eq!(blob.entity_count(), 4);
+        assert_eq!(blob.entity_index(Uuid([7; 16])), Some(3));
+        assert_eq!(blob.entity_id(0), Uuid([1; 16]));
+        let experience = blob.table(EXPERIENCE).unwrap();
+        assert_eq!(blob.tables()[experience].rows, 3);
+        assert_eq!(blob.get_u32(EXPERIENCE, 3, 0).unwrap(), 7100);
+        assert_eq!(blob.get_u32(EXPERIENCE, 2, 0).unwrap(), 5655);
+        assert_eq!(blob.get_u32(EXPERIENCE, 1, 0).unwrap(), 5595);
+        let strings = blob.table("core.v0.TranslatedString").unwrap();
+        assert_eq!(blob.row(strings, 1), [5; 4]);
+        // The old rows are where they were, so offsets into them still hold.
+        assert_eq!(blob.data(old_rows, 24).unwrap(), before);
+        // A reference to an entity can be anywhere.
+        assert_eq!(blob.entity_at(pointed), Some(2));
     }
 
     #[test]

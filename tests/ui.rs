@@ -37,6 +37,314 @@ fn opens_a_save_and_shows_the_party() {
     assert!(ui.sees("Karlach"));
     assert!(ui.sees("Carries none."));
     ui.snapshot("02b-party-scrolled");
+    // Below the party, the companions waiting at camp.
+    ui.scroll(egui::pos2(600.0, 500.0), -900.0);
+    assert!(ui.sees("At camp"));
+    assert!(ui.sees("Gale"));
+    assert!(ui.sees("Level 4 · At camp"));
+    ui.snapshot("02c-party-at-camp");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn approval_has_its_own_tab_and_can_go_below_zero() {
+    use nautiloid_save_editor::session::Field;
+    let (dir, mut ui) = open_sample("approval");
+    ui.click("Approval");
+    assert!(ui.sees("What each companion thinks of your character, from −50 to 100."));
+    assert!(ui.sees("Gale"));
+    assert!(ui.sees("At camp"));
+    // Eleven steps down from 10.
+    for _ in 0..11 {
+        ui.click("−");
+    }
+    assert_eq!(
+        ui.app.session().unwrap().value(Field::Approval(2, 0)),
+        Some(-1)
+    );
+    assert!(ui.sees("10 ➡ −1") || ui.sees("−1"));
+    ui.snapshot("12-approval");
+    // The change is counted on this tab, not on Party.
+    ui.click("Party");
+    assert_eq!(ui.app.session().unwrap().changes().len(), 1);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn inventory_lists_holders_and_changes_a_stack() {
+    use nautiloid_save_editor::session::{Field, Session};
+    let (dir, mut ui) = open_sample("inventory");
+    ui.click("Inventory");
+    // The hero's things: one stack and two single items.
+    assert!(ui.sees("STACKS (1)"));
+    assert!(ui.sees("Potion Healing"));
+    assert!(ui.sees("OBJ_Potion_Healing"));
+    assert!(ui.sees("SINGLE ITEMS (2)"));
+    assert!(ui.sees("Rope"));
+    ui.click("+");
+    assert_eq!(
+        ui.app.session().unwrap().value(Field::Amount(0, 1)),
+        Some(4)
+    );
+    ui.snapshot("13-inventory");
+
+    // The camp chest, where food shows what it is worth.
+    ui.click("Camp chest");
+    assert!(ui.sees("Fruit Apple"));
+    assert!(ui.sees("CONS_FOOD_Fruit_Apple · 3 camp supplies each"));
+    ui.click("+");
+    assert_eq!(
+        ui.app.session().unwrap().value(Field::Amount(1, 0)),
+        Some(5)
+    );
+    ui.snapshot("13b-inventory-camp-chest");
+
+    // Searching narrows the list.
+    ui.click("Tav");
+    ui.click("Filter Tav's items");
+    ui.type_text("rope");
+    assert!(ui.sees("STACKS (0)"));
+    assert!(ui.sees("SINGLE ITEMS (1)"));
+
+    // Both changes are on this tab's count and survive an export.
+    assert_eq!(ui.app.session().unwrap().changes().len(), 2);
+    ui.click("Export as a new save…");
+    ui.click("Export");
+    let exported =
+        Session::open(&dir.join("Tav-1234__Shattered Sanctum - 8h 02m - Edited")).unwrap();
+    assert_eq!(exported.value(Field::Amount(0, 1)), Some(4));
+    assert_eq!(exported.value(Field::Amount(1, 0)), Some(5));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn mods_are_listed_with_whether_the_game_has_them_active() {
+    use nautiloid_save_editor::saves::build::mod_uuid;
+    // The game's own layout: the profile's mod list beside its Savegames folder.
+    let root = temp_dir("mods");
+    let story = root.join("Public/Savegames/Story");
+    std::fs::create_dir_all(&story).unwrap();
+    sample_saves(&story);
+    let entry = |uuid: String| {
+        format!(
+            "<node id=\"ModuleShortDesc\"><attribute id=\"UUID\" type=\"guid\" value=\"{uuid}\"/></node>"
+        )
+    };
+    std::fs::write(
+        root.join("Public/modsettings.lsx"),
+        format!(
+            "<save><region id=\"ModuleSettings\"><node id=\"root\"><children><node id=\"Mods\"><children>{}{}</children></node></children></node></region></save>",
+            entry(mod_uuid(0).to_string().to_uppercase()),
+            entry(mod_uuid(1).to_string()),
+        ),
+    )
+    .unwrap();
+
+    let mut ui = Harness::new(Some(story.clone()), WINDOW);
+    ui.click("Shattered Sanctum - 8h 02m");
+    ui.click("Mods");
+    assert!(ui.sees("ADDED MODS (12)"));
+    assert!(ui.sees("Sample mod 1"));
+    assert!(ui.find_all("ACTIVE").len() >= 2);
+    assert_eq!(ui.find_all("NOT ACTIVE").len(), 10);
+    // Nothing here changes the save.
+    assert!(!ui.sees("Remove"));
+    assert!(!ui.app.session().unwrap().is_dirty());
+    ui.snapshot("14-mods");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn items_take_the_names_from_the_game_once_it_is_found() {
+    use nautiloid_save_editor::catalog::build::game_folder;
+    let (dir, mut ui) = open_sample("names");
+    // A game install somewhere else, with the sample's items in it.
+    let game = dir.join("Baldurs Gate 3");
+    game_folder(
+        &game,
+        &[
+            (
+                "00000000-0000-0000-0000-00000000dddd",
+                "OBJ_Potion_Healing",
+                "Potion of Healing",
+            ),
+            (
+                "00000000-0000-0000-0000-00000000cccc",
+                "OBJ_Rope",
+                "Rope of Climbing",
+            ),
+        ],
+    )
+    .unwrap();
+
+    // Without it, the game's internal names, made readable, and a way to point at it.
+    ui.click("Inventory");
+    assert!(ui.sees("the game wasn't found"));
+    assert!(ui.sees("Potion Healing"));
+    ui.platform.borrow_mut().folder_to_pick = Some(game.clone());
+    ui.click("Choose game folder…");
+    ui.settle();
+    assert!(!ui.sees("the game wasn't found"));
+    assert!(ui.sees("Potion of Healing"));
+    assert!(ui.sees("Rope of Climbing"));
+    // The internal name is still there, beneath.
+    assert!(ui.sees("OBJ_Potion_Healing"));
+    // An item the game's files don't have keeps its readable internal name.
+    assert!(ui.sees("Bag Alchemy Pouch"));
+    ui.click("+");
+    let change = ui.app.session().unwrap().changes().pop().unwrap();
+    assert_eq!(change.what, "Potion of Healing");
+    ui.snapshot("15-inventory-names");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn adds_items_from_the_games_files() {
+    use nautiloid_save_editor::catalog::build::{game_folder_with, GameItem};
+    use nautiloid_save_editor::catalog::Kind;
+    use nautiloid_save_editor::party::Holder;
+    use nautiloid_save_editor::session::Session;
+    let (dir, mut ui) = open_sample("add-items");
+    let item = |template, stats, display, kind, category| GameItem {
+        template,
+        stats,
+        display,
+        kind,
+        category,
+        max_stack: 1,
+    };
+    let game = dir.join("Baldurs Gate 3");
+    game_folder_with(
+        &game,
+        &[
+            item(
+                "00000000-0000-0000-0000-00000000cccc",
+                "OBJ_Rope",
+                "Rope",
+                Kind::Object,
+                "Tool",
+            ),
+            item(
+                "00000000-0000-0000-0000-00000000ffff",
+                "OBJ_Rope_Silk",
+                "Silk Rope",
+                Kind::Object,
+                "Tool",
+            ),
+            item(
+                "00000000-0000-0000-0000-000000001111",
+                "WPN_Longsword_1",
+                "Longsword +1",
+                Kind::Weapon,
+                "",
+            ),
+            item(
+                "00000000-0000-0000-0000-000000005555",
+                "WPN_Longsword",
+                "Longsword",
+                Kind::Weapon,
+                "",
+            ),
+        ],
+    )
+    .unwrap();
+
+    // Without the game's files there is nothing to choose from.
+    ui.click("Inventory");
+    ui.click("Add items to Tav…");
+    assert!(ui.app.dialog().is_none());
+    ui.platform.borrow_mut().folder_to_pick = Some(game.clone());
+    ui.click("Choose game folder…");
+    ui.settle();
+
+    ui.click("Add items to Tav…");
+    assert!(ui.sees("Add items for Tav"));
+    assert!(ui.sees("search the game's 4 items"));
+    ui.type_text("rope");
+    assert!(ui.sees("Silk Rope"));
+    assert!(ui.sees("Object · Tool · OBJ_Rope_Silk"));
+    // The rope Tav holds first, then the silk rope made from it.
+    ui.click_nth("Add", 0);
+    ui.click_nth("Add", 0);
+    ui.click_nth("Add", 1);
+    assert!(ui.sees("2 added"));
+    assert!(ui.sees("1 added"));
+    ui.snapshot("16-add-items");
+
+    // Nobody in the party has a weapon, but a sword can still be added: it is made from
+    // the one the trader has equipped.
+    ui.press(egui::Key::A, egui::Modifiers::COMMAND);
+    ui.type_text("long");
+    assert!(ui.sees("Longsword +1"));
+    ui.click_nth("Add", 1);
+    assert!(ui.sees("1 added"));
+    ui.type_text("zzz");
+    assert!(ui.sees("No item in the game's files is called that."));
+    ui.click("Done");
+    assert!(ui.app.dialog().is_none());
+
+    // What is to be added is listed, can be changed, and is on this tab's changes.
+    assert!(ui.sees("ADDING (3)"));
+    assert!(ui.sees("A copy of the one Tav holds · OBJ_Rope"));
+    assert!(ui.sees("Made from a Rope Tav holds · OBJ_Rope_Silk"));
+    assert!(ui.sees("Made from a Longsword someone outside the party has · WPN_Longsword_1"));
+    // A single item says why its count can't change, and has a + to add more instead: the
+    // pluses are the three being added, the stack's, the bag's and the rope's.
+    assert!(ui.sees("the save keeps no count for these"));
+    // The rope Tav has is marked as wares; the game's mark shows beside it.
+    assert!(ui.sees("OBJ_Rope · wares"));
+    ui.click_nth("+", 5);
+    assert_eq!(
+        ui.app
+            .session()
+            .unwrap()
+            .added(Holder::Character(0), "OBJ_Rope"),
+        3
+    );
+    let whats: Vec<String> = ui
+        .app
+        .session()
+        .unwrap()
+        .changes()
+        .iter()
+        .map(|c| c.what.clone())
+        .collect();
+    assert_eq!(whats, ["Add Rope", "Add Silk Rope", "Add Longsword +1"]);
+    ui.snapshot("16b-adding");
+
+    // Filtering for something Tav doesn't have finds it among the game's items, to add
+    // there and then, or in the dialog with the search already made.
+    ui.click("Filter Tav's items");
+    ui.type_text("silk");
+    assert!(ui.sees("SINGLE ITEMS (0)"));
+    assert!(ui.sees("ADD TO TAV FROM THE GAME'S ITEMS"));
+    assert!(ui.sees("Silk Rope"));
+    ui.snapshot("16c-filter-finds-the-game's-items");
+    ui.click("Add");
+    assert_eq!(
+        ui.app
+            .session()
+            .unwrap()
+            .added(Holder::Character(0), "OBJ_Rope_Silk"),
+        2
+    );
+    ui.click("Add items to Tav…");
+    assert!(ui.sees("Silk Rope"));
+    assert!(ui.sees("2 added"));
+    ui.click("Done");
+
+    ui.click("Export as a new save…");
+    ui.click("Export");
+    let exported =
+        Session::open(&dir.join("Tav-1234__Shattered Sanctum - 8h 02m - Edited")).unwrap();
+    let tav: Vec<&str> = exported.original().inventories[0]
+        .items
+        .iter()
+        .map(|i| i.stats.as_str())
+        .collect();
+    assert_eq!(tav.iter().filter(|s| **s == "OBJ_Rope").count(), 4);
+    assert_eq!(tav.iter().filter(|s| **s == "OBJ_Rope_Silk").count(), 2);
+    assert_eq!(tav.iter().filter(|s| **s == "WPN_Longsword_1").count(), 1);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

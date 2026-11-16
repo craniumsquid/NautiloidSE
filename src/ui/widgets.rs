@@ -32,6 +32,13 @@ pub fn button(ui: &mut Ui, text: &str, kind: Kind) -> Response {
 }
 
 /// A button that fills the width available.
+/// A smaller button, for an action on one line of a list.
+pub fn small_button(ui: &mut Ui, text: &str, kind: Kind) -> Response {
+    let font = theme::semibold(14.0);
+    let size = Vec2::new(text_width(ui, text, &font) + 18.0, 26.0);
+    sized_button(ui, text, kind, size, font)
+}
+
 pub fn wide_button(ui: &mut Ui, text: &str, kind: Kind) -> Response {
     let size = Vec2::new(ui.available_width(), 42.0);
     sized_button(ui, text, kind, size, theme::semibold(16.0))
@@ -180,12 +187,12 @@ pub fn badge_at(ui: &Ui, pos: egui::Pos2, text: &str, color: Color32, fill: Colo
 /// differs from the save's.
 pub fn stepper(
     ui: &mut Ui,
-    value: u32,
-    range: RangeInclusive<u32>,
-    step: u32,
+    value: i32,
+    range: RangeInclusive<i32>,
+    step: i32,
     width: f32,
     changed: bool,
-) -> Option<u32> {
+) -> Option<i32> {
     let mut result = None;
     let outline = if changed {
         theme::CHANGED_LINE
@@ -301,6 +308,14 @@ pub fn clipped(ui: &mut Ui, text: &str, font: FontId, color: Color32) -> Respons
     ui.add(egui::Label::new(egui::RichText::new(text).font(font).color(color)).truncate())
 }
 
+/// -1234567 as "−1,234,567".
+pub fn signed(number: i64) -> String {
+    match number < 0 {
+        true => format!("−{}", grouped(number.unsigned_abs())),
+        false => grouped(number as u64),
+    }
+}
+
 /// 1234567 as "1,234,567".
 pub fn grouped(number: u64) -> String {
     let digits = number.to_string();
@@ -339,5 +354,7 @@ mod tests {
         assert_eq!(grouped(1_000), "1,000");
         assert_eq!(grouped(3_385), "3,385");
         assert_eq!(grouped(1_234_567), "1,234,567");
+        assert_eq!(super::signed(-12_345), "−12,345");
+        assert_eq!(super::signed(40), "40");
     }
 }

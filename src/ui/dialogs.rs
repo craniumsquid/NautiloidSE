@@ -1,7 +1,10 @@
-//! The dialogs: exporting, leaving with changes unexported, and saying what went wrong.
+//! The dialogs: exporting, leaving with changes unexported, choosing items to add, and
+//! saying what went wrong.
 
 use super::widgets::{self, Kind};
 use super::{theme, Action};
+use crate::catalog::CatalogItem;
+use crate::party::Holder;
 use crate::session::Session;
 use eframe::egui::{
     self, Align, Align2, Color32, Context, Frame, Id, Key, Layout, Margin, Order, Rounding, Sense,
@@ -31,9 +34,14 @@ pub enum Dialog {
     },
     /// About to leave a save with changes that have not been exported.
     Unexported { then: After },
+    /// Choosing items from the game's to add to what someone holds.
+    AddItem { holder: Holder, query: String },
     /// Something could not be done.
     Problem { title: String, detail: String },
 }
+
+/// How many matching items the add-item dialog shows at once.
+const SHOWN: usize = 60;
 
 /// Why `name` can't be a save's name, if it can't.
 pub fn name_problem(name: &str) -> Option<&'static str> {
@@ -77,13 +85,19 @@ pub fn show(
                 .rounding(Rounding::same(14.0))
                 .inner_margin(Margin::same(24.0))
                 .show(ui, |ui| {
-                    ui.set_width(460.0);
+                    ui.set_width(match dialog {
+                        Dialog::AddItem { .. } => 640.0,
+                        _ => 460.0,
+                    });
                     ui.spacing_mut().item_spacing.y = 10.0;
                     match dialog {
                         Dialog::Export { name, error, .. } => {
                             export(ui, name, error, session, actions)
                         }
                         Dialog::Unexported { then } => unexported(ui, then, session, actions),
+                        Dialog::AddItem { holder, query } => {
+                            add_item(ui, *holder, query, session, actions)
+                        }
                         Dialog::Problem { title, detail } => problem(ui, title, detail, actions),
                     }
                 });
@@ -209,6 +223,197 @@ fn unexported(ui: &mut Ui, then: &After, session: Option<&Session>, actions: &mu
     });
 }
 
+fn add_item(
+    ui: &mut Ui,
+    holder: Holder,
+    query: &mut String,
+    session: Option<&Session>,
+    actions: &mut Vec<Action>,
+) {
+    let Some(session) = session else { return };
+    let who = session.holder_in_sentence(holder);
+    title(ui, &format!("Add items for {who}"));
+    ui.label(
+        egui::RichText::new(
+            "Pick any of the game's items. Each new one is a copy of the closest item in \
+             this save (the same item, if anyone has one), made into the item you pick. An \
+             item that stacks is added as one stack.",
+        )
+        .color(theme::TEXT_SOFT),
+    );
+    let Some(catalog) = session.catalog() else {
+        ui.label(
+            egui::RichText::new(
+                "The game's files haven't been read, so there are no items to choose from.",
+            )
+            .color(theme::CORAL),
+        );
+        buttons(ui, |ui| {
+            if widgets::button(ui, "Close", Kind::Secondary).clicked() {
+                actions.push(Action::CloseDialog);
+            }
+        });
+        return;
+    };
+    let field = ui.add(
+        egui::TextEdit::singleline(query)
+            .hint_text("Search the game's items")
+            .desired_width(f32::INFINITY)
+            .font(theme::medium(16.0))
+            .margin(Margin::symmetric(10.0, 8.0)),
+    );
+    // Put the cursor in the search when the dialog opens.
+    if ui.memory(|m| m.focused().is_none()) {
+        field.request_focus();
+    }
+
+    let wanted = query.trim().to_lowercase();
+    if wanted.chars().count() < MIN_SEARCH {
+        ui.label(
+            egui::RichText::new(format!(
+                "Type part of a name to search the game's {} items.",
+                widgets::grouped(catalog.listed().count() as u64)
+            ))
+            .color(theme::MUTED),
+        );
+    } else {
+        let found = matching(catalog, &wanted);
+        if found.is_empty() {
+            ui.label(
+                egui::RichText::new("No item in the game's files is called that.")
+                    .color(theme::MUTED),
+            );
+        }
+        egui::ScrollArea::vertical()
+            .max_height(340.0)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                for item in found.iter().take(SHOWN) {
+                    found_item(ui, session, holder, item, actions);
+                }
+            });
+        if found.len() > SHOWN {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} more. Type more of the name to find them.",
+                    found.len() - SHOWN
+                ))
+                .font(theme::body(12.5))
+                .color(theme::MUTED),
+            );
+        }
+    }
+    buttons(ui, |ui| {
+        if widgets::button(ui, "Done", Kind::Secondary).clicked() {
+            actions.push(Action::CloseDialog);
+        }
+    });
+}
+
+/// The fewest letters a search of the game's items starts with.
+pub const MIN_SEARCH: usize = 2;
+
+/// The game's items whose names hold `wanted`: names that start with it first, then names
+/// that hold it, then those whose game name alone does; each lot by name.
+pub fn matching<'a>(catalog: &'a crate::catalog::Catalog, wanted: &str) -> Vec<&'a CatalogItem> {
+    let wanted = wanted.trim().to_lowercase();
+    let mut found: Vec<&CatalogItem> = catalog.search(&wanted).collect();
+    found.sort_by_key(|item| {
+        let name = item.display.to_lowercase();
+        match (name.starts_with(&wanted), name.contains(&wanted)) {
+            (true, _) => 0,
+            (false, true) => 1,
+            _ => 2,
+        }
+    });
+    found
+}
+
+/// One item the search found: what it is, and a way to add it or why it can't be.
+pub fn found_item(
+    ui: &mut Ui,
+    session: &Session,
+    holder: Holder,
+    item: &CatalogItem,
+    actions: &mut Vec<Action>,
+) {
+    let mut about = vec![item.kind.label().to_owned()];
+    if !item.category.is_empty() {
+        about.push(words(&item.category));
+    }
+    if !item.rarity.is_empty() && item.rarity != "Common" {
+        about.push(item.rarity.clone());
+    }
+    about.push(item.stats.clone());
+    let pattern = session.pattern_for(holder, item);
+    let story = item.story.then_some(
+        "A story item: the game's quests may count on there being only the one, so a second \
+         may confuse them.",
+    );
+    ui.horizontal(|ui| {
+        ui.set_min_height(36.0);
+        let room = (ui.available_width() - 150.0).max(200.0);
+        ui.vertical(|ui| {
+            ui.set_max_width(room);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.label(egui::RichText::new(session.catalog_name(item)).font(theme::medium(15.0)));
+            ui.label(
+                egui::RichText::new(about.join(" · "))
+                    .font(theme::body(12.0))
+                    .color(theme::MUTED),
+            );
+            if let (Some(story), Ok(_)) = (story, &pattern) {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(story)
+                            .font(theme::body(12.0))
+                            .color(theme::ACCENT),
+                    )
+                    .wrap(),
+                );
+            }
+            if let Err(why) = &pattern {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(why)
+                            .font(theme::body(12.0))
+                            .color(theme::CORAL),
+                    )
+                    .wrap(),
+                );
+            }
+        });
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if pattern.is_ok() {
+                let added = session.added(holder, &item.stats);
+                if widgets::button(ui, "Add", Kind::Secondary).clicked() {
+                    actions.push(Action::AddItem(holder, item.stats.clone()));
+                }
+                if added > 0 {
+                    ui.label(egui::RichText::new(format!("{added} added")).color(theme::ACCENT));
+                }
+            }
+        });
+    });
+}
+
+/// `MagicScroll` as "Magic scroll".
+fn words(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (i, c) in name.chars().enumerate() {
+        if c == '_' {
+            out.push(' ');
+        } else if i > 0 && c.is_uppercase() {
+            out.push(' ');
+            out.extend(c.to_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 fn problem(ui: &mut Ui, heading: &str, detail: &str, actions: &mut Vec<Action>) {
     title(ui, heading);
     ui.add(egui::Label::new(egui::RichText::new(detail).color(theme::TEXT_SOFT)).wrap());
@@ -231,5 +436,12 @@ mod tests {
         assert!(name_problem("what?").is_some());
         assert!(name_problem("ends.").is_some());
         assert!(name_problem(&"x".repeat(81)).is_some());
+    }
+
+    #[test]
+    fn splits_category_names_into_words() {
+        assert_eq!(super::words("MagicScroll"), "Magic scroll");
+        assert_eq!(super::words("Helmet"), "Helmet");
+        assert_eq!(super::words("VanityBody"), "Vanity body");
     }
 }

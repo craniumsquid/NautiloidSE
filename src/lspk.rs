@@ -490,9 +490,11 @@ pub fn peek(path: &std::path::Path, names: &[&str]) -> Result<Vec<Option<Vec<u8>
     file.read_exact(&mut list)?;
     let count = u32_at(&list, 0) as usize;
     ensure!(count <= 1 << 20, "implausible file count {count}");
-    let table = lz4_flex::block::decompress(&list[8..], count * ENTRY_LEN)
+    // The game's biggest packages have a few bytes after the entries.
+    let mut table = lz4_flex::block::decompress(&list[8..], count * ENTRY_LEN + 64)
         .map_err(|e| anyhow!("file list: {e}"))?;
-    ensure!(table.len() == count * ENTRY_LEN, "file list is truncated");
+    ensure!(table.len() >= count * ENTRY_LEN, "file list is truncated");
+    table.truncate(count * ENTRY_LEN);
 
     let mut found = vec![None; names.len()];
     for raw in table.chunks_exact(ENTRY_LEN) {
@@ -525,6 +527,95 @@ pub fn peek(path: &std::path::Path, names: &[&str]) -> Result<Vec<Option<Vec<u8>
         found[wanted] = Some(unpack_stored(name, method, &stored, expected)?);
     }
     Ok(found)
+}
+
+/// Copies the files named out of a package on disk into `out`, keeping their paths, without
+/// loading the rest. Returns how many were found.
+pub fn extract(path: &std::path::Path, names: &[&str], out: &std::path::Path) -> Result<usize> {
+    let mut found = 0;
+    for (name, contents) in names.iter().zip(peek(path, names)?) {
+        if let Some(contents) = contents {
+            let target = out.join(name);
+            if let Some(folder) = target.parent() {
+                std::fs::create_dir_all(folder)?;
+            }
+            std::fs::write(&target, contents)?;
+            found += 1;
+        }
+    }
+    Ok(found)
+}
+
+/// One file in a package, as its file list describes it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Listed {
+    pub name: String,
+    pub part: u8,
+    pub method: Option<Method>,
+    pub stored_len: u64,
+    pub len: u64,
+}
+
+/// What a package on disk says about itself, read without loading its contents: for the
+/// game's own packages, which run to gigabytes.
+#[derive(Clone, Debug)]
+pub struct Listing {
+    pub version: u32,
+    pub parts: u16,
+    pub flags: u8,
+    pub files: Vec<Listed>,
+}
+
+/// Reads a package's header and file list, and nothing else. A version this code doesn't
+/// read is reported with no files.
+pub fn list(path: &std::path::Path) -> Result<Listing> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let file_len = file.metadata()?.len();
+    let mut header = [0u8; HEADER_LEN];
+    file.read_exact(&mut header)
+        .context("too short to be a package")?;
+    ensure!(&header[0..4] == MAGIC, "not a package (no LSPK signature)");
+    let version = u32_at(&header, 4);
+    let mut listing = Listing {
+        version,
+        parts: u16_at(&header, 38),
+        flags: header[20],
+        files: Vec::new(),
+    };
+    if version != VERSION {
+        return Ok(listing);
+    }
+    let list_offset = u64_at(&header, 8);
+    let list_size = u32_at(&header, 16) as u64;
+    ensure!(
+        list_size >= 8 && list_offset >= HEADER_LEN as u64 && list_offset + list_size <= file_len,
+        "file list is outside the file"
+    );
+    let mut list = vec![0u8; list_size as usize];
+    file.seek(SeekFrom::Start(list_offset))?;
+    file.read_exact(&mut list)?;
+    let count = u32_at(&list, 0) as usize;
+    ensure!(count <= 1 << 22, "implausible file count {count}");
+    // The game's biggest packages have a few bytes after the entries.
+    let mut table = lz4_flex::block::decompress(&list[8..], count * ENTRY_LEN + 64)
+        .map_err(|e| anyhow!("file list: {e}"))?;
+    ensure!(table.len() >= count * ENTRY_LEN, "file list is truncated");
+    table.truncate(count * ENTRY_LEN);
+    for raw in table.chunks_exact(ENTRY_LEN) {
+        let name_len = raw[..NAME_LEN]
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(NAME_LEN);
+        listing.files.push(Listed {
+            name: String::from_utf8_lossy(&raw[..name_len]).into_owned(),
+            part: raw[262],
+            method: Method::from_flags(raw[263]).ok(),
+            stored_len: u32_at(raw, 264) as u64,
+            len: u32_at(raw, 268) as u64,
+        });
+    }
+    Ok(listing)
 }
 
 /// Builds a package from scratch. Used by tests, which have no real save to start from.
@@ -572,6 +663,44 @@ pub fn build(files: &[(&str, &[u8])]) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn extracts_named_files_keeping_their_paths() {
+        let bytes = build(&[
+            ("Public/Shared/RootTemplates/_merged.lsf", b"templates"),
+            ("other.txt", b"left alone"),
+        ])
+        .unwrap();
+        let dir = std::env::temp_dir().join(format!("nautiloid-extract-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let pak = dir.join("Shared.pak");
+        std::fs::write(&pak, &bytes).unwrap();
+        let out = dir.join("out");
+        let names = ["Public/Shared/RootTemplates/_merged.lsf", "missing.txt"];
+        assert_eq!(extract(&pak, &names, &out).unwrap(), 1);
+        assert_eq!(
+            std::fs::read(out.join("Public/Shared/RootTemplates/_merged.lsf")).unwrap(),
+            b"templates"
+        );
+        assert!(!out.join("other.txt").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn lists_a_package_without_loading_it() {
+        let bytes = build(&[("a.lsf", b"first"), ("dir/b.txt", b"second file")]).unwrap();
+        let path = std::env::temp_dir().join(format!("nautiloid-list-{}.pak", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+        let listing = list(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(listing.version, 18);
+        assert_eq!(listing.parts, 1);
+        let names: Vec<&str> = listing.files.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["a.lsf", "dir/b.txt"]);
+        assert_eq!(listing.files[1].len, 11);
+        assert_eq!(listing.files[0].part, 0);
+    }
+
     use super::*;
 
     fn sample() -> Vec<u8> {

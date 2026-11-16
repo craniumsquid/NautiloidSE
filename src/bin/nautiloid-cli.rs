@@ -3,8 +3,9 @@
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use nautiloid_save_editor::diff;
+use nautiloid_save_editor::items;
 use nautiloid_save_editor::lsf::{Lsf, NodeId, Sections};
-use nautiloid_save_editor::lspk::Method;
+use nautiloid_save_editor::lspk::{self, Method};
 use nautiloid_save_editor::newage::NewAge;
 use nautiloid_save_editor::party::{self, Party};
 use nautiloid_save_editor::save::{self, Save, Support};
@@ -22,7 +23,7 @@ A <save> is a .lsv file or the save folder that holds one.
       The files in the save package.
   info <save>
       Game version, party, difficulty and mods.
-  dump <save> <file.lsf> [--node ID | --path PATH] [--depth N]
+  dump <save> <file.lsf> | <file.lsf> [--node ID | --path PATH] [--depth N]
       A document as text. Nodes are [Name] #id; attributes are Name: Type = value.
   find <save> [--value TEXT] [--attr NAME] [--in NODE] [--file FILE] [--limit N]
       Attributes whose value is TEXT (numbers) or contains it (text and UUIDs), whose name
@@ -32,8 +33,29 @@ A <save> is a .lsv file or the save folder that holds one.
   party <save>
       The party as the entity data has it: level, experience, ability scores, gold and
       Inspiration.
+  items <save> [--game FOLDER]
+      What each character and the camp chest hold, with the amount of each stack and the
+      camp supplies food is worth. With the game's files, the names players see.
+  add <save> <folder> <name> <holder> <item>[*N]... --game FOLDER
+      Add items as the app does, and export: <holder> is a character's name or \"chest\",
+      each <item> the game's name for it (OBJ_Potion_Healing), *N for more than one.
+  donors <save> [--game FOLDER] [--tables] [--kind KIND]
+      Research: every item in the save's item factory, counted by kind and by where it is
+      (the party's, someone else's, nowhere) and whether it is equipped, stacked or a story
+      item. --tables shows which component tables each kind of item has; --kind lists the
+      items of one kind (Weapon, Armour, Object).
+  owners <save>
+      Research: who each of the party's items belongs to by its ownership rows, and how long
+      each character's lists of what they own are.
+  pointers <save> <table>
+      Research: every eight bytes in the entity data that read as an offset of one of the
+      table's records, counted by the table and field they are in.
+  pointer-check <save>...
+      For each table of records the editor adds to, whether anything it doesn't know about
+      points into it.
   edit <save> <folder> <name> [--xp WHO=N,...] [--level-up WHO,...]
        [--ability WHO:ABILITY=POINTS,...] [--gold WHO=N,...] [--inspiration N]
+       [--approval WHO=N,...]
       Write a copy of the save as a new save called <name> under <folder>, with the party
       changed. WHO is a character's name or the start of their entity identifier.
       --xp sets total experience. --level-up entitles a character to one more level, which
@@ -43,6 +65,10 @@ A <save> is a .lsv file or the save folder that holds one.
       The tables in a document's entity data (its NewAge blob).
   rows <save> <file.lsf> <table> [--limit N]
       A table's rows as 32-bit numbers, with the entity each belongs to.
+  entity <save> <file.lsf> <entity>
+      Every row an entity owns, table by table.
+  at <save> <file.lsf> <offset> [--len N]
+      What a row's offset points at: the table and row there, and the bytes from it.
   set <save> <folder> <name> --u32 TABLE:ENTITY:OFFSET[@INDEX]=VALUE,... [--file FILE]
       Write a copy of the save as a new save called <name> under <folder>, with 32-bit
       fields of its entity data changed. ENTITY is the owner's identifier and OFFSET the
@@ -53,6 +79,33 @@ A <save> is a .lsv file or the save folder that holds one.
       Read each save, write it back in memory and compare.
   extract <save> <file> <out>
       Write one file's uncompressed contents to <out>.
+  experiment <save> <folder> <name> <kind> [ITEM]
+      Research: write a test save that adds to the entity data instead of overwriting it.
+      Kinds: copy-item ITEM (a second copy of an unstacked item, in the same inventory);
+      copy-as ITEM LIKE (a copy given LIKE's template and game name in the tree only);
+      copy-as-template ITEM LIKE (the same, and LIKE's template and visual rows);
+      copy-to ITEM STATS --game FOLDER (a copy made into the game's item called STATS);
+      add DONOR HOLDER [--as STATS] [--amount N] [--spell] [--no-spellbook] --game FOLDER
+      (a copy of DONOR, from anywhere, in HOLDER's main inventory: made into STATS, as a
+      stack of N, given a spell record of its own, or without its spell rows);
+      checks that change nothing a player would see: entity-list (the entity list moved),
+      move-table [WHO] (the experience table moved, a party member's experience +100),
+      loose-member ITEM, loose-slot-record ITEM, loose-reference ITEM (one of the item's
+      inventory records, or its identifier, copied outside its table and pointed at),
+      grown-tables (the inventory record tables grown, every pointer into them moved),
+      old-list-row (the entity list moved, an unreferenced row of where it was rewritten).
+  survey <game Data folder>
+      What the game's packages hold that an item catalog needs: for every .pak under the
+      folder, its version, parts and file count, and the root templates, item stats and
+      language files in it. Reads only each package's header and file list.
+  catalog <game Data folder | folder from catalog-files> [--find TEXT] [--limit N]
+      The game's items with their English names, read from the game's own files.
+  catalog-files <game Data folder> <out folder>
+      Copy out of the game's packages the files an item catalog is built from: every root
+      template list, the item stats (Object, Armor, Weapon) and the English text. They are
+      the game's own files: for working on the catalog, not for sharing.
+  newage <save> <file.lsf> <out>
+      Write a document's entity data (its NewAge blob) to <out>.
   rewrite <save> <out.lsv> [--reencode]
       Write a copy of the package. With --reencode every document is parsed, written and
       compressed again, to test that the game accepts this tool's output.
@@ -148,15 +201,60 @@ fn run(raw: &[String]) -> Result<()> {
             &Args::parse(
                 rest,
                 &[],
-                &["xp", "level-up", "ability", "gold", "inspiration"],
+                &[
+                    "xp",
+                    "level-up",
+                    "ability",
+                    "gold",
+                    "inspiration",
+                    "approval",
+                ],
             )?,
             out,
         ),
+        "items" => items(&Args::parse(rest, &[], &["game"])?, out),
+        "owners" => owners(&Args::parse(rest, &[], &[])?, out),
+        "pointers" => pointers(&Args::parse(rest, &[], &[])?, out),
+        "pointer-check" => {
+            for path in &rest.to_vec() {
+                let save = Save::open(Path::new(path))?;
+                if save.support() != Support::Editable {
+                    continue;
+                }
+                let globals = save.lsf(save::GLOBALS)?;
+                let entities = NewAge::from_lsf(&globals)?;
+                writeln!(
+                    out,
+                    "{path}: entity list {:?}, data {}",
+                    entities.entity_list_offset(),
+                    entities.data_section().len()
+                )?;
+                for (name, result) in items::pointer_check(&entities) {
+                    match result {
+                        Ok(n) => writeln!(out, "    {name}: {n} known")?,
+                        Err(e) => writeln!(out, "    {name}: {e:#}")?,
+                    }
+                }
+            }
+            Ok(())
+        }
+        "add" => add(&Args::parse(rest, &[], &["game"])?, out),
+        "donors" => donors(&Args::parse(rest, &["tables"], &["game", "kind"])?, out),
         "tables" => tables(&Args::parse(rest, &[], &[])?, out),
         "rows" => rows(&Args::parse(rest, &[], &["limit"])?, out),
+        "entity" => entity(&Args::parse(rest, &[], &[])?, out),
+        "at" => at(&Args::parse(rest, &[], &["len"])?, out),
         "set" => set(&Args::parse(rest, &[], &["file", "u32"])?, out),
         "check" => check(&Args::parse(rest, &[], &[])?, out),
         "extract" => extract(&Args::parse(rest, &[], &[])?),
+        "newage" => newage_blob(&Args::parse(rest, &[], &[])?),
+        "experiment" => experiment(
+            &Args::parse(rest, &["spell", "no-spellbook"], &["game", "as", "amount"])?,
+            out,
+        ),
+        "survey" => survey(&Args::parse(rest, &[], &[])?, out),
+        "catalog-files" => catalog_files(&Args::parse(rest, &[], &[])?, out),
+        "catalog" => catalog(&Args::parse(rest, &[], &["find", "limit"])?, out),
         "rewrite" => rewrite(&Args::parse(rest, &["reencode"], &[])?, out),
         "help" | "--help" | "-h" => {
             write!(out, "{USAGE}")?;
@@ -333,12 +431,15 @@ fn dump_node(
 }
 
 fn dump(args: &Args, out: &mut impl Write) -> Result<()> {
-    args.expect(
-        2,
-        "dump <save> <file.lsf> [--node ID | --path PATH] [--depth N]",
-    )?;
-    let save = Save::open(Path::new(&args.positional[0]))?;
-    let lsf = save.lsf(&args.positional[1])?;
+    let usage = "dump <save> <file.lsf> | <file.lsf> [--node ID | --path PATH] [--depth N]";
+    // A document on its own, such as one of the game's, or one inside a save.
+    let lsf = match args.positional.as_slice() {
+        [file] if file.to_lowercase().ends_with(".lsf") => {
+            Lsf::parse(&std::fs::read(file).with_context(|| file.clone())?)?
+        }
+        [save, file] => Save::open(Path::new(save))?.lsf(file)?,
+        _ => bail!("usage: nautiloid-cli {usage}"),
+    };
     let depth = args.number("depth")?;
     let start = match (args.number("node")?, args.get("path")) {
         (Some(id), _) => {
@@ -537,10 +638,14 @@ fn print_party(party: &Party, out: &mut impl Write) -> Result<()> {
         } else {
             String::new()
         };
+        let experience = match c.experience {
+            Some(total) => format!("experience {total}"),
+            None => "at camp".to_owned(),
+        };
         writeln!(
             out,
-            "    level {}{pending}, experience {}, template {}",
-            c.level, c.experience, c.template
+            "    level {}{pending}, {experience}, template {}",
+            c.level, c.template
         )?;
         let totals: Vec<String> = party::ABILITIES
             .iter()
@@ -560,6 +665,10 @@ fn print_party(party: &Party, out: &mut impl Write) -> Result<()> {
                 points.join("  "),
                 party::ABILITY_BASE
             )?;
+        }
+        if !c.approval.is_empty() {
+            let ratings: Vec<String> = c.approval.iter().map(|a| a.rating.to_string()).collect();
+            writeln!(out, "    approval {}", ratings.join(", "))?;
         }
         let stacks: Vec<String> = c
             .gold
@@ -629,7 +738,8 @@ fn edit(args: &Args, out: &mut impl Write) -> Result<()> {
     args.expect(
         3,
         "edit <save> <folder> <name> [--xp WHO=N,...] [--level-up WHO,...] \
-         [--ability WHO:ABILITY=POINTS,...] [--gold WHO=N,...] [--inspiration N]",
+         [--ability WHO:ABILITY=POINTS,...] [--gold WHO=N,...] [--inspiration N] \
+         [--approval WHO=N,...]",
     )?;
     let save = Save::open(Path::new(&args.positional[0]))?;
     if let Support::ReadOnly(why) = save.support() {
@@ -683,10 +793,26 @@ fn edit(args: &Args, out: &mut impl Write) -> Result<()> {
     if let Some(amount) = args.get("inspiration") {
         party::set_inspiration(&mut entities, number(amount)?)?;
     }
+    for item in list("approval") {
+        let (name, rating) = item
+            .split_once('=')
+            .ok_or_else(|| anyhow!("--approval takes WHO=N"))?;
+        let rating: i32 = rating
+            .parse()
+            .with_context(|| format!("{rating} is not a number"))?;
+        let companion = who(&before, name)?;
+        // The first rating is of the first player's character; a game for one has no other.
+        let first = companion
+            .approval
+            .first()
+            .ok_or_else(|| anyhow!("{name} has no approval rating to change"))?;
+        party::set_approval(&mut entities, companion.entity, first.of, rating)?;
+    }
 
     entities.store(&mut globals)?;
     let mut package = save.package.clone();
     package.replace(save::GLOBALS, &globals.write()?)?;
+    save::as_manual_save(&mut package)?;
     let folder = save::export_copy(
         &save,
         &package,
@@ -775,6 +901,837 @@ fn rows(args: &Args, out: &mut impl Write) -> Result<()> {
             "… {} more (raise --limit to see them)",
             table.rows - limit
         )?;
+    }
+    Ok(())
+}
+
+fn items(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(1, "items <save> [--game FOLDER]")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    // With the game's files, the names players see.
+    let catalog = match args.get("game") {
+        Some(folder) => {
+            let folder = Path::new(folder);
+            Some(match folder.join("Shared.pak").is_file() {
+                true => nautiloid_save_editor::catalog::Catalog::from_game(folder)?,
+                false => nautiloid_save_editor::catalog::Catalog::from_folder(folder)?,
+            })
+        }
+        None => None,
+    };
+    let globals = save.lsf(save::GLOBALS)?;
+    let party = party::read(&globals, &NewAge::from_lsf(&globals)?)?;
+    let mut supplies = 0u64;
+    for inventory in &party.inventories {
+        let holder = match inventory.holder {
+            party::Holder::Character(c) => party.characters[c].display_name(),
+            party::Holder::CampChest => "Camp chest".to_owned(),
+        };
+        writeln!(out, "{holder}: {} items", inventory.items.len())?;
+        for item in &inventory.items {
+            let amount = match item.stacked {
+                true => format!("x{}", item.amount),
+                false => "one".to_owned(),
+            };
+            let supply = item
+                .supply
+                .map(|s| format!("  supplies {s} each"))
+                .unwrap_or_default();
+            let bagged = if item.in_container {
+                "  (in a container)"
+            } else {
+                ""
+            };
+            let shown = catalog
+                .as_ref()
+                .and_then(|c| c.display_name(&item.template, &item.stats))
+                .map(|name| format!("{name}  ({})", item.stats))
+                .unwrap_or_else(|| item.stats.clone());
+            writeln!(
+                out,
+                "  {amount:>6}  {shown}{supply}{bagged}  {}",
+                item.entity
+            )?;
+            supplies += item.supply.unwrap_or(0) as u64 * item.amount as u64;
+        }
+    }
+    writeln!(out, "camp supplies by this count: {supplies}")?;
+    if let Some(total) = party.camp_supplies {
+        writeln!(out, "camp supplies as stored: {total}")?;
+    }
+    Ok(())
+}
+
+/// Adds items as the app does, and exports: `add <save> <folder> <name> <holder>
+/// <item>[*N]...`, the holder a character's name or "chest", each item by its game name.
+fn add(args: &Args, out: &mut impl Write) -> Result<()> {
+    use nautiloid_save_editor::session::Session;
+    ensure!(
+        args.positional.len() >= 5,
+        "usage: nautiloid-cli add <save> <folder> <name> <holder> <item>[*N]... --game FOLDER"
+    );
+    let folder = Path::new(
+        args.get("game")
+            .ok_or_else(|| anyhow!("add needs --game"))?,
+    );
+    let catalog = match folder.join("Shared.pak").is_file() {
+        true => nautiloid_save_editor::catalog::Catalog::from_game(folder)?,
+        false => nautiloid_save_editor::catalog::Catalog::from_folder(folder)?,
+    };
+    let mut session = Session::open(Path::new(&args.positional[0]))?;
+    session.set_catalog(std::sync::Arc::new(catalog));
+    let holder = match args.positional[3].as_str() {
+        "chest" => party::Holder::CampChest,
+        name => party::Holder::Character(
+            session
+                .original()
+                .characters
+                .iter()
+                .position(|c| c.display_name() == name)
+                .ok_or_else(|| anyhow!("nobody called {name}"))?,
+        ),
+    };
+    let mut time = 0.0;
+    for wanted in &args.positional[4..] {
+        let (stats, count) = match wanted.split_once('*') {
+            Some((stats, n)) => (stats, n.parse::<u32>()?),
+            None => (wanted.as_str(), 1),
+        };
+        for _ in 0..count {
+            let index = session
+                .add_item(holder, stats, time)
+                .map_err(|e| anyhow!("{stats}: {e}"))?;
+            time += 10.0;
+            if session.added(holder, stats) == count {
+                writeln!(out, "{stats} x{count}: {}", session.addition_hint(index))?;
+            }
+        }
+    }
+    let written = session.export(Path::new(&args.positional[1]), &args.positional[2])?;
+    writeln!(out, "wrote {}", written.display())?;
+    Ok(())
+}
+
+/// Research: every eight bytes in the entity data that read as an offset into the table
+/// named, grouped by the table they are in and where in its rows.
+fn pointers(args: &Args, out: &mut impl Write) -> Result<()> {
+    use std::collections::BTreeMap;
+    args.expect(2, "pointers <save> <table>")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let globals = save.lsf(save::GLOBALS)?;
+    let entities = NewAge::from_lsf(&globals)?;
+    let target = entities
+        .table(&args.positional[1])
+        .ok_or_else(|| anyhow!("no table {}", args.positional[1]))?;
+    let t = &entities.tables()[target];
+    let start = (entities.row_offset(target, 0) - 48) as u64;
+    let end = start + (t.rows * t.row_len) as u64;
+    writeln!(
+        out,
+        "{}: {} rows of {}, {start}..{end}",
+        t.name, t.rows, t.row_len
+    )?;
+    let data = entities.data_section();
+    let mut found: BTreeMap<String, usize> = BTreeMap::new();
+    let mut at = 0usize;
+    while at + 8 <= data.len() {
+        let v = u64::from_le_bytes(data[at..at + 8].try_into().unwrap());
+        if v >= start && v <= end && (v - start).is_multiple_of(t.row_len as u64) {
+            let place = match entities.locate(at as u64) {
+                Some((table, row, within)) => {
+                    let _ = row;
+                    format!("{} +{within}", entities.tables()[table].name)
+                }
+                None => "loose".to_owned(),
+            };
+            *found.entry(place).or_default() += 1;
+        }
+        at += 8;
+    }
+    for (place, n) in found {
+        writeln!(out, "{n:>7}  {place}")?;
+    }
+    Ok(())
+}
+
+/// Research: who each item in the party's inventories belongs to, by its ownership rows,
+/// compared with who holds it.
+fn owners(args: &Args, out: &mut impl Write) -> Result<()> {
+    use std::collections::BTreeMap;
+    args.expect(1, "owners <save>")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let globals = save.lsf(save::GLOBALS)?;
+    let entities = NewAge::from_lsf(&globals)?;
+    let party = party::read(&globals, &entities)?;
+    let u64_of = |b: &[u8], at: usize| u64::from_le_bytes(b[at..at + 8].try_into().unwrap());
+    let row_of = |name: &str, index: u32| -> Option<Vec<u8>> {
+        let t = entities.table(name)?;
+        let row = entities.row_of(t, index)?;
+        Some(entities.row(t, row).to_vec())
+    };
+    let name_of = |index: Option<u32>| -> String {
+        let Some(index) = index else {
+            return "-".to_owned();
+        };
+        party
+            .characters
+            .iter()
+            .find(|c| entities.entity_index(c.entity) == Some(index))
+            .map(|c| c.display_name())
+            .unwrap_or_else(|| format!("#{index}"))
+    };
+    let mut patterns: BTreeMap<String, usize> = BTreeMap::new();
+    for inventory in &party.inventories {
+        let holder = match inventory.holder {
+            party::Holder::Character(c) => party.characters[c].display_name(),
+            party::Holder::CampChest => "Camp chest".to_owned(),
+        };
+        for item in &inventory.items {
+            let Some(index) = entities.entity_index(item.entity) else {
+                continue;
+            };
+            let current = row_of("game.v0.OwneeCurrentComponent", index)
+                .and_then(|r| entities.entity_at(u64_of(&r, 0)));
+            let history = row_of("game.v2.OwneeHistoryComponent", index);
+            let hist: Vec<String> = match &history {
+                Some(r) => (0..r.len() / 8)
+                    .map(|i| {
+                        let p = u64_of(r, i * 8);
+                        if p == u64::MAX {
+                            "none".to_owned()
+                        } else {
+                            name_of(entities.entity_at(p))
+                        }
+                    })
+                    .collect(),
+                None => vec!["no-history".to_owned()],
+            };
+            let key = format!(
+                "{holder:<12} current={:<12} history={}",
+                name_of(current),
+                hist.join(",")
+            );
+            *patterns.entry(key).or_default() += 1;
+        }
+    }
+    for (key, n) in patterns {
+        writeln!(out, "{n:>5}  {key}")?;
+    }
+    // Who has ownership lists, and how long.
+    for name in [
+        "game.v0.IsCurrentOwnerComponent",
+        "game.v0.IsLatestOwnerComponent",
+        "game.v0.IsOriginalOwnerComponent",
+    ] {
+        let Some(t) = entities.table(name) else {
+            continue;
+        };
+        for (row, owner) in entities.owned_rows(t) {
+            let r = entities.row(t, row);
+            let n = (u64_of(r, 8).wrapping_sub(u64_of(r, 0))) / 8;
+            let shown = name_of(Some(owner));
+            if !shown.starts_with('#') {
+                writeln!(out, "{name}: {shown} lists {n}")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Research: every item in the save's item factory, where it is and what it is, to see
+/// what new items could be copied from.
+fn donors(args: &Args, out: &mut impl Write) -> Result<()> {
+    use nautiloid_save_editor::catalog::Catalog;
+    use std::collections::{BTreeMap, BTreeSet};
+    args.expect(1, "donors <save> [--game FOLDER] [--tables] [--kind KIND]")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let catalog = match args.get("game") {
+        Some(folder) => {
+            let folder = Path::new(folder);
+            Some(match folder.join("Shared.pak").is_file() {
+                true => Catalog::from_game(folder)?,
+                false => Catalog::from_folder(folder)?,
+            })
+        }
+        None => None,
+    };
+    let globals = save.lsf(save::GLOBALS)?;
+    let entities = NewAge::from_lsf(&globals)?;
+    let party = party::read(&globals, &entities)?;
+    let creators = globals
+        .find(&["Items", "ItemFactory", "Creators"])
+        .context("no creators")?;
+    let nodes = globals
+        .find(&["Items", "ItemFactory", "Items"])
+        .context("no items")?;
+    let u64_of = |b: &[u8], at: usize| u64::from_le_bytes(b[at..at + 8].try_into().unwrap());
+    let has = |name: &str, index: u32| {
+        entities
+            .table(name)
+            .is_some_and(|t| entities.row_of(t, index).is_some())
+    };
+    // Inventory entity -> owner entity.
+    let owned_by = entities.table("game.inventory.v1.IsOwnedComponent");
+    let inventory_owner = |inventory: u32| -> Option<u32> {
+        let t = owned_by?;
+        let row = entities.row_of(t, inventory)?;
+        entities.entity_at(u64_of(entities.row(t, row), 0))
+    };
+    let names: BTreeMap<u32, String> = party
+        .characters
+        .iter()
+        .filter_map(|c| Some((entities.entity_index(c.entity)?, c.display_name())))
+        .collect();
+    let member = entities.table("game.inventory.v0.MemberComponent");
+    let mut by_kind: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+    let mut tables_by_kind: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+    let mut count_by_kind: BTreeMap<String, usize> = BTreeMap::new();
+    let wanted_kind = args.get("kind");
+    for (creator, node) in globals
+        .children_named(creators, "Creator")
+        .zip(globals.children_named(nodes, "Item"))
+    {
+        let Some(id) = globals.get(creator, "Entity").and_then(|v| v.as_uuid()) else {
+            continue;
+        };
+        let Some(index) = entities.entity_index(id) else {
+            continue;
+        };
+        let stats = globals
+            .get(node, "Stats")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default();
+        let template_type = globals
+            .get(creator, "TemplateType")
+            .and_then(|v| v.as_i64());
+        let (kind, category, display) = match catalog.as_ref().and_then(|c| c.by_stats(&stats)) {
+            Some(item) => (
+                item.kind.label().to_owned(),
+                item.category.clone(),
+                item.display.clone(),
+            ),
+            None => ("?".to_owned(), String::new(), String::new()),
+        };
+        let mut flags = Vec::new();
+        if !has(party::tables::ITEM, index) {
+            flags.push("not-item");
+        }
+        for (name, flag) in [
+            ("game.inventory.v0.WieldingComponent", "equipped"),
+            ("game.inventory.v0.NewStackComponent", "stack"),
+            ("game.inventory.v0.StackMemberComponent", "stack-member"),
+            ("game.item.v0.IsStoryItemComponent", "story"),
+            ("game.inventory.v1.ContainerComponent", "container"),
+        ] {
+            if has(name, index) {
+                flags.push(flag);
+            }
+        }
+        // Where: the inventory's owner.
+        let place = member
+            .and_then(|t| Some((t, entities.row_of(t, index)?)))
+            .and_then(|(t, row)| {
+                let data = entities.data(u64_of(entities.row(t, row), 0), 16).ok()?;
+                entities.entity_at(u64_of(data, 0))
+            });
+        let mut owner = place.and_then(inventory_owner);
+        // A bag's owner is the bag: go up to whoever holds it.
+        for _ in 0..4 {
+            let Some(o) = owner else { break };
+            if names.contains_key(&o) || !has(party::tables::ITEM, o) {
+                break;
+            }
+            let up = member
+                .and_then(|t| Some((t, entities.row_of(t, o)?)))
+                .and_then(|(t, row)| {
+                    let data = entities.data(u64_of(entities.row(t, row), 0), 16).ok()?;
+                    entities.entity_at(u64_of(data, 0))
+                })
+                .and_then(inventory_owner);
+            owner = up.or(owner);
+            if up.is_none() {
+                break;
+            }
+        }
+        let where_ = match (place, owner) {
+            (None, _) => "nowhere".to_owned(),
+            (Some(_), Some(o)) if names.contains_key(&o) => format!("party:{}", names[&o]),
+            (Some(_), Some(o)) => format!("other:{}", entities.entity_id(o)),
+            (Some(_), None) => "inventory-without-owner".to_owned(),
+        };
+        let status = if flags.is_empty() {
+            "free".to_owned()
+        } else {
+            flags.join(",")
+        };
+        let class = if where_.starts_with("party") {
+            "party"
+        } else if where_ == "nowhere" {
+            "nowhere"
+        } else {
+            "other"
+        };
+        *by_kind
+            .entry(format!("{kind} {category}"))
+            .or_default()
+            .entry(format!("{class}/{status}"))
+            .or_default() += 1;
+        *count_by_kind.entry(kind.clone()).or_default() += 1;
+        for t in 0..entities.tables().len() {
+            if entities.row_of(t, index).is_some() {
+                *tables_by_kind
+                    .entry(kind.clone())
+                    .or_default()
+                    .entry(entities.tables()[t].name.clone())
+                    .or_default() += 1;
+            }
+        }
+        if wanted_kind.is_some_and(|k| k == kind) {
+            writeln!(
+                out,
+                "{index:>6} {id} {display:<32} {stats:<40} {category:<16} tt={template_type:?} {status:<20} {where_}"
+            )?;
+        }
+    }
+    for (kind, places) in &by_kind {
+        writeln!(out, "{kind}")?;
+        for (place, n) in places {
+            writeln!(out, "    {n:>5}  {place}")?;
+        }
+    }
+    if args.get("tables").is_some() {
+        let all: BTreeSet<&String> = tables_by_kind.values().flat_map(|t| t.keys()).collect();
+        let kinds: Vec<&String> = tables_by_kind.keys().collect();
+        writeln!(
+            out,
+            "\ncomponent tables, share of items of each kind that have one"
+        )?;
+        write!(out, "{:<64}", "")?;
+        for k in &kinds {
+            write!(out, " {:>8}", k)?;
+        }
+        writeln!(out)?;
+        for name in all {
+            write!(out, "{name:<64}")?;
+            for k in &kinds {
+                let n = tables_by_kind[*k].get(name).copied().unwrap_or(0);
+                write!(out, " {:>7}%", n * 100 / count_by_kind[*k].max(1))?;
+            }
+            writeln!(out)?;
+        }
+    }
+    Ok(())
+}
+
+fn experiment(args: &Args, out: &mut impl Write) -> Result<()> {
+    let usage = "experiment <save> <folder> <name> <kind> [ITEM]";
+    ensure!(args.positional.len() >= 4, "usage: nautiloid-cli {usage}");
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    if let Support::ReadOnly(why) = save.support() {
+        bail!("{why}");
+    }
+    let mut globals = save.lsf(save::GLOBALS)?;
+    let mut entities = NewAge::from_lsf(&globals)?;
+    let item = || -> Result<value::Uuid> {
+        let text = args
+            .positional
+            .get(4)
+            .ok_or_else(|| anyhow!("this kind needs an item's entity"))?;
+        value::Uuid::parse(text).ok_or_else(|| anyhow!("{text} is not an entity's identifier"))
+    };
+    match args.positional[3].as_str() {
+        "copy-item" => {
+            let copy = items::copy_item(&mut globals, &mut entities, item()?)?;
+            writeln!(out, "copy {copy}")?;
+        }
+        "entity-list" => {
+            entities.add_entities(&[])?;
+        }
+        "move-table" => {
+            let table = entities
+                .table(party::tables::EXPERIENCE)
+                .ok_or_else(|| anyhow!("no experience table"))?;
+            entities.move_table(table)?;
+            let party = party::read(&globals, &entities)?;
+            let first = &party.characters[0];
+            let xp = first
+                .experience
+                .ok_or_else(|| anyhow!("not in the party"))?;
+            party::set_experience(&mut entities, first.entity, xp + 100)?;
+            writeln!(
+                out,
+                "{}: experience {xp} -> {}",
+                first.display_name(),
+                xp + 100
+            )?;
+        }
+        "copy-as" | "copy-as-template" => {
+            let like = args
+                .positional
+                .get(5)
+                .and_then(|t| value::Uuid::parse(t))
+                .ok_or_else(|| anyhow!("copy-as needs ITEM and LIKE"))?;
+            let rows: &[&str] = match args.positional[3].as_str() {
+                "copy-as" => &[],
+                _ => &[
+                    "game.templates.v0.TemplateComponent",
+                    "game.visual.v5.GameObjectVisualComponent",
+                ],
+            };
+            let copy = items::copy_item_as(&mut globals, &mut entities, item()?, like, rows)?;
+            writeln!(out, "copy {copy}")?;
+        }
+        "copy-to" => {
+            // A copy made into an item from the game's catalog, by its game name.
+            let stats = args
+                .positional
+                .get(5)
+                .ok_or_else(|| anyhow!("copy-to needs ITEM and the game name to make it"))?;
+            let folder = args
+                .get("game")
+                .ok_or_else(|| anyhow!("copy-to needs --game FOLDER"))?;
+            let folder = Path::new(folder);
+            let catalog = match folder.join("Shared.pak").is_file() {
+                true => nautiloid_save_editor::catalog::Catalog::from_game(folder)?,
+                false => nautiloid_save_editor::catalog::Catalog::from_folder(folder)?,
+            };
+            let target = catalog
+                .by_stats(stats)
+                .ok_or_else(|| anyhow!("the game has no item called {stats}"))?;
+            let copy = items::copy_item_to(
+                &mut globals,
+                &mut entities,
+                item()?,
+                &target.template,
+                stats,
+            )?;
+            writeln!(out, "copy {copy}: {} ({})", target.display, target.template)?;
+        }
+        "add" => {
+            // A copy of DONOR, from anywhere, into HOLDER's main inventory: a character by
+            // name, or "chest".
+            let holder = args
+                .positional
+                .get(5)
+                .ok_or_else(|| anyhow!("add needs DONOR and HOLDER"))?;
+            let party = party::read(&globals, &entities)?;
+            let (holder_id, is_character) = match holder.as_str() {
+                "chest" => {
+                    let chest = entities
+                        .table(party::tables::CAMP_CHEST)
+                        .and_then(|t| entities.owned_rows(t).next())
+                        .map(|(_, owner)| entities.entity_id(owner))
+                        .ok_or_else(|| anyhow!("the save has no camp chest"))?;
+                    (chest, false)
+                }
+                name => (
+                    party
+                        .characters
+                        .iter()
+                        .find(|c| c.display_name() == name)
+                        .map(|c| c.entity)
+                        .ok_or_else(|| anyhow!("nobody called {name}"))?,
+                    true,
+                ),
+            };
+            let to = items::Destination::of(&entities, holder_id, is_character)?;
+            let amount = args.number("amount")?.map(|n| n as u32);
+            let without: &[&str] = match args.get("no-spellbook") {
+                Some(_) => &[
+                    "game.spell.v3.SpellBookComponent",
+                    "game.v0.InventoryItemDataPopulatedComponent",
+                ],
+                None => &[],
+            };
+            let copy = items::copy_into_without(
+                &mut globals,
+                &mut entities,
+                item()?,
+                &to,
+                amount,
+                without,
+            )?;
+            writeln!(out, "copy {copy} into {holder}'s {}", to.inventory)?;
+            if let Some(stats) = args.get("as") {
+                let folder = Path::new(
+                    args.get("game")
+                        .ok_or_else(|| anyhow!("--as needs --game FOLDER"))?,
+                );
+                let catalog = match folder.join("Shared.pak").is_file() {
+                    true => nautiloid_save_editor::catalog::Catalog::from_game(folder)?,
+                    false => nautiloid_save_editor::catalog::Catalog::from_folder(folder)?,
+                };
+                let target = catalog
+                    .by_stats(stats)
+                    .ok_or_else(|| anyhow!("the game has no item called {stats}"))?;
+                items::make_into(&mut globals, &mut entities, copy, &target.template, stats)?;
+                writeln!(out, "  made into {} ({})", target.display, target.template)?;
+                if args.get("spell").is_some() {
+                    ensure!(!target.spell.is_empty(), "{stats} casts no spell");
+                    let before = items::spell_of(&entities, copy);
+                    items::set_spell(&mut entities, copy, &target.spell)?;
+                    writeln!(out, "  casts {} (was {before:?})", target.spell)?;
+                }
+            }
+        }
+        "loose-member" => items::checks::loose_member_data(&mut entities, item()?)?,
+        "loose-slot-record" => items::checks::loose_slot_data(&mut entities, item()?)?,
+        "loose-reference" => items::checks::loose_reference(&mut entities, item()?)?,
+        "grown-tables" => items::checks::grown_tables(&mut entities)?,
+        "old-list-row" => items::checks::old_list_row(&mut entities)?,
+        other => bail!("no experiment called {other}"),
+    }
+
+    entities.store(&mut globals)?;
+    let mut package = save.package.clone();
+    package.replace(save::GLOBALS, &globals.write()?)?;
+    save::as_manual_save(&mut package)?;
+    let folder = save::export_copy(
+        &save,
+        &package,
+        Path::new(&args.positional[1]),
+        &args.positional[2],
+    )?;
+    // Read back what was written.
+    let written = Save::open(&folder)?;
+    let globals = written.lsf(save::GLOBALS)?;
+    let entities = NewAge::from_lsf(&globals)?;
+    party::read(&globals, &entities)?;
+    writeln!(out, "wrote {}", folder.display())?;
+    Ok(())
+}
+
+fn survey(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(1, "survey <game Data folder>")?;
+    let root = Path::new(&args.positional[0]);
+    let paks = packages_under(root)?;
+    let wanted = |name: &str| {
+        name.contains("RootTemplates")
+            || name.contains("Stats/Generated/Data/")
+            || name.ends_with(".loca")
+            || name.contains("TreasureTable")
+    };
+    writeln!(out, "{} packages under {}", paks.len(), root.display())?;
+    for path in &paks {
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let shown = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        match lspk::list(path) {
+            Ok(listing) => {
+                let parts: std::collections::BTreeSet<u8> =
+                    listing.files.iter().map(|f| f.part).collect();
+                writeln!(
+                    out,
+                    "== {shown}  {} MB, version {}, {} parts, flags {:#x}, {} files, parts used {:?}",
+                    size / 1_000_000,
+                    listing.version,
+                    listing.parts,
+                    listing.flags,
+                    listing.files.len(),
+                    parts
+                )?;
+                for file in listing.files.iter().filter(|f| wanted(&f.name)).take(400) {
+                    writeln!(
+                        out,
+                        "   {:>10} {:>10} part {} {}  {}",
+                        file.len,
+                        file.stored_len,
+                        file.part,
+                        file.method.map_or("?", |m| m.label()),
+                        file.name
+                    )?;
+                }
+            }
+            Err(error) => writeln!(out, "== {shown}  {} MB: {error:#}", size / 1_000_000)?,
+        }
+    }
+    Ok(())
+}
+
+/// The game's packages under a folder, its subfolders included.
+fn packages_under(root: &Path) -> Result<Vec<std::path::PathBuf>> {
+    let mut paks = Vec::new();
+    let mut folders = vec![root.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(&folder).with_context(|| folder.display().to_string())? {
+            let path = entry?.path();
+            if path.is_dir() {
+                folders.push(path);
+            } else if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("pak"))
+            {
+                paks.push(path);
+            }
+        }
+    }
+    paks.sort();
+    Ok(paks)
+}
+
+fn catalog(args: &Args, out: &mut impl Write) -> Result<()> {
+    use nautiloid_save_editor::catalog::Catalog;
+    args.expect(
+        1,
+        "catalog <game Data folder | folder from catalog-files> [--find TEXT]",
+    )?;
+    let folder = Path::new(&args.positional[0]);
+    let started = std::time::Instant::now();
+    let catalog = match folder.join("Shared.pak").is_file() {
+        true => Catalog::from_game(folder)?,
+        false => Catalog::from_folder(folder)?,
+    };
+    let named = catalog
+        .items
+        .iter()
+        .filter(|i| !i.display.is_empty())
+        .count();
+    writeln!(
+        out,
+        "{} item templates, {named} with an English name, read in {:.1} s",
+        catalog.items.len(),
+        started.elapsed().as_secs_f64()
+    )?;
+    let listed = catalog.listed().count();
+    let story = catalog.listed().filter(|i| i.story).count();
+    let containers: Vec<&str> = catalog
+        .listed()
+        .filter(|i| i.container)
+        .map(|i| i.display.as_str())
+        .collect();
+    writeln!(
+        out,
+        "{listed} offered for adding, {story} of them story items, {} containers: {}",
+        containers.len(),
+        containers.join(", ")
+    )?;
+    let find = args.get("find").map(str::to_lowercase);
+    let limit = args.number("limit")?.unwrap_or(40);
+    let matching = catalog.items.iter().filter(|i| match &find {
+        Some(text) => {
+            i.display.to_lowercase().contains(text)
+                || i.stats.to_lowercase().contains(text)
+                || i.name.to_lowercase().contains(text)
+        }
+        None => true,
+    });
+    for item in matching.take(limit) {
+        writeln!(
+            out,
+            "{:<36} {:<34} {:<7} {:<10} {:<18} {:<5} x{:<6} {}",
+            item.display,
+            item.stats,
+            item.kind.label(),
+            item.rarity,
+            item.category,
+            match (item.story, item.container) {
+                (true, _) => "story",
+                (_, true) => "cont",
+                _ => "",
+            },
+            item.max_stack,
+            item.template
+        )?;
+        if !item.spell.is_empty() {
+            writeln!(out, "    casts {}", item.spell)?;
+        }
+    }
+    Ok(())
+}
+
+fn catalog_files(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(2, "catalog-files <game Data folder> <out folder>")?;
+    let root = Path::new(&args.positional[0]);
+    let target = Path::new(&args.positional[1]);
+    let wanted = |name: &str| {
+        name.ends_with("RootTemplates/_merged.lsf")
+            || ["Object.txt", "Armor.txt", "Weapon.txt"]
+                .iter()
+                .any(|f| name.ends_with(&format!("Stats/Generated/Data/{f}")))
+            || name == "Localization/English/english.loca"
+    };
+    let mut total = 0;
+    for path in packages_under(root)? {
+        let Ok(listing) = lspk::list(&path) else {
+            continue;
+        };
+        let names: Vec<&str> = listing
+            .files
+            .iter()
+            .filter(|f| f.len > 0 && wanted(&f.name))
+            .map(|f| f.name.as_str())
+            .collect();
+        if names.is_empty() {
+            continue;
+        }
+        let found =
+            lspk::extract(&path, &names, target).with_context(|| path.display().to_string())?;
+        writeln!(out, "{found:>4} files from {}", path.display())?;
+        total += found;
+    }
+    writeln!(out, "{total} files written to {}", target.display())?;
+    Ok(())
+}
+
+fn newage_blob(args: &Args) -> Result<()> {
+    args.expect(3, "newage <save> <file.lsf> <out>")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let lsf = save.lsf(&args.positional[1])?;
+    let attr = NewAge::attribute(&lsf).ok_or_else(|| anyhow!("the document has no NewAge data"))?;
+    std::fs::write(&args.positional[2], lsf.attr_bytes(attr))?;
+    Ok(())
+}
+
+fn at(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(3, "at <save> <file.lsf> <offset> [--len N]")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let entities = NewAge::from_lsf(&save.lsf(&args.positional[1])?)?;
+    let offset: u64 = args.positional[2]
+        .parse()
+        .map_err(|_| anyhow!("{} is not an offset", args.positional[2]))?;
+    let len = args.number("len")?.unwrap_or(32);
+    match entities.locate(offset) {
+        Some((table, row, within)) => {
+            let table = &entities.tables()[table];
+            writeln!(
+                out,
+                "{} row {row} of {} ({} bytes each), {within} bytes in",
+                table.name, table.rows, table.row_len
+            )?;
+            if let Some(entity) = entities.entity_at(offset) {
+                writeln!(out, "entity {}", entities.entity_id(entity))?;
+            }
+        }
+        None => writeln!(out, "in no table")?,
+    }
+    let bytes = entities.data(offset, len)?;
+    writeln!(out, "{}", hex(bytes))?;
+    writeln!(out, "{}", row_text(bytes))?;
+    Ok(())
+}
+
+fn entity(args: &Args, out: &mut impl Write) -> Result<()> {
+    args.expect(3, "entity <save> <file.lsf> <entity>")?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let entities = NewAge::from_lsf(&save.lsf(&args.positional[1])?)?;
+    let id = value::Uuid::parse(&args.positional[2])
+        .ok_or_else(|| anyhow!("{} is not an entity's identifier", args.positional[2]))?;
+    let index = entities
+        .entity_index(id)
+        .ok_or_else(|| anyhow!("the document has no entity {id}"))?;
+    for (table_id, table) in entities.tables().iter().enumerate() {
+        if let Some(row) = entities.row_of(table_id, index) {
+            writeln!(
+                out,
+                "{:<70} @{:<9} {}",
+                table.name,
+                entities.row_offset(table_id, row),
+                row_text(entities.row(table_id, row))
+            )?;
+        }
     }
     Ok(())
 }

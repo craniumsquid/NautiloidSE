@@ -30,23 +30,6 @@ impl SaveKind {
     }
 }
 
-/// Modules that are the game itself, not mods the player added.
-const BASE_MODULES: [&str; 13] = [
-    "Gustav",
-    "GustavDev",
-    "GustavX",
-    "Shared",
-    "SharedDev",
-    "Honour",
-    "FW3",
-    "Engine",
-    "Game",
-    "DiceSet_01",
-    "DiceSet_02",
-    "DiceSet_03",
-    "ModBrowser",
-];
-
 /// What the browser shows for one save.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SaveSummary {
@@ -199,7 +182,9 @@ pub fn summarize(folder: &Path) -> Result<SaveSummary> {
         .find(&["MetaData", "MetaData", "ModuleSettings", "Mods"])
         .map(|list| {
             meta.children_named(list, "ModuleShortDesc")
-                .filter(|&m| !BASE_MODULES.contains(&text(&meta, m, "Folder").as_str()))
+                .filter(|&m| {
+                    !crate::mods::BASE_MODULES.contains(&text(&meta, m, "Folder").as_str())
+                })
                 .map(|m| text(&meta, m, "Name"))
                 .collect()
         })
@@ -441,6 +426,13 @@ pub mod build {
         }
     }
 
+    /// The identifier of the `n`-th sample mod.
+    pub fn mod_uuid(n: usize) -> crate::value::Uuid {
+        let mut id = [0x5au8; 16];
+        id[0] = n as u8 + 1;
+        crate::value::Uuid(id)
+    }
+
     /// A `meta.lsf` like the game's, with the fields the browser reads.
     pub fn meta(spec: &SaveSpec) -> Result<Vec<u8>> {
         let text = |v: &str| Value::Text(v.to_owned());
@@ -449,15 +441,21 @@ pub mod build {
                 .attr("Folder", DataType::LSString, text("GustavX"))
                 .attr("Name", DataType::LSString, text("GustavX")),
         );
-        for name in &spec.mods {
+        for (n, name) in spec.mods.iter().enumerate() {
             mods = mods.child(
                 Node::new("ModuleShortDesc")
+                    .attr("UUID", DataType::Uuid, Value::Uuid(mod_uuid(n)))
                     .attr(
                         "Folder",
                         DataType::LSString,
                         text(&format!("{name}_folder")),
                     )
-                    .attr("Name", DataType::LSString, text(name)),
+                    .attr("Name", DataType::LSString, text(name))
+                    .attr(
+                        "Version64",
+                        DataType::Int64,
+                        Value::Int64(36028797018963968),
+                    ),
             );
         }
         let inner = Node::new("MetaData")

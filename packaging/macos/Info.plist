@@ -10,6 +10,8 @@
 	<string>app.nautiloid.SaveEditor</string>
 	<key>CFBundleExecutable</key>
 	<string>nautiloid-save-editor</string>
+	<key>CFBundleIconFile</key>
+	<string>icon</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<!-- The build sets both versions from Cargo.toml. -->

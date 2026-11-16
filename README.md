@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/icon/icon.png" width="128" alt=""></p>
+
 # Nautiloid Save Editor
 
 A desktop save editor for **Baldur's Gate 3** (Patch 8) on Windows, macOS and Linux, including
@@ -10,9 +12,10 @@ original, and the new save is read back and checked before the editor keeps it.
 
 ## What it can change
 
-So far, the party:
+The party, and the companions waiting at camp:
 
-- **Experience**, for each character.
+- **Experience**, for each character in the party. A companion at camp has none of their
+  own: the game awards it when they join.
 - **Level-ups.** The editor entitles a character to the next level, and the game offers the
   level-up and takes you through the choices.
 - **Ability points**: the points put into each ability at character creation. The game adds
@@ -20,13 +23,41 @@ So far, the party:
 - **Gold**, for a character who already carries some.
 - **Inspiration**, once the party has earned a point.
 
-Each of these has been changed in a save that then loaded in the game (build `4.1.1.7631656`)
-with the new value. Inventory, approval and the mod list come next.
+- **Inventory**: how many each stack holds, for every character and the camp chest. Food
+  shows the camp supplies it is worth, and the game's supplies total follows it. Items have
+  the names players see, read from your own install of the game; nothing from the game is
+  shipped with the editor. Items added by mods keep their internal names for now.
+- **Adding items**, any of the game's items, searched by name. A new item is a copy of the
+  closest item anywhere in the save (the same item if anyone has one, else one like it,
+  equipped or not, the party's or anyone else's), made into the item you pick. A scroll is
+  made from another scroll where the save has one, and the game gives it its spell. New
+  items are not marked as wares, even when what they are copied from is. An item that stacks goes in as one stack of
+  as many as you ask for; a single item has a + beside it to add more. New items go at the
+  end of the inventory.
+- **Approval**: what each companion thinks of your character.
+
+Each of these has been changed in a save that then loaded in the game (build
+`4.1.1.7631656`) with the new value. For a companion at camp that is so for ability points;
+a level-up or a change of gold there is the same field as a party member's but has not been
+tried. Adding items was tried in every way the app uses: copies of what the holder carries
+and of what NPCs carry or wear, items made from another of the same kind or of another kind,
+new stacks, scrolls of other spells (from another scroll or from anything else), and copies
+between a character and the camp chest.
+
+An exported quicksave or autosave is written as a manual save, so the game's load menu lists
+it by its name (it lists its own autosaves as "Autosave 4" whatever they're called). An
+Honour Mode save stays one.
+
+It also lists the mods a save asks for, marked by whether your game has them active. That
+list is read only: the game's own mod manager is the place to change it.
 
 Saves from before Patch 8 are listed but can't be edited.
 
+- [docs/HOW-TO-USE.md](docs/HOW-TO-USE.md): a step-by-step guide, with pictures.
 - [SCOPE.md](SCOPE.md): what the editor will and won't do, the build order and where it stands.
 - [docs/FORMAT.md](docs/FORMAT.md): what is known about the save format.
+- [docs/TECHNICAL.md](docs/TECHNICAL.md): how the editor works, for anyone forking or
+  extending it.
 
 ## Getting it
 
@@ -40,6 +71,8 @@ page, open the latest **CI** run and download `nautiloid-save-editor-windows-x64
   desktop with OpenGL and `libxkbcommon-x11`, which desktop systems have.
 - **macOS:** built only for version tags, or when the CI workflow is run by hand with the macOS
   box ticked. That build has not been run on a Mac yet.
+
+Each download includes the guide as a PDF, `How to use Nautiloid.pdf`.
 
 Or build it from source with [Rust](https://rustup.rs) 1.88 or later:
 
@@ -55,6 +88,8 @@ cargo run --release
    each can be reverted on its own. Undo and redo work as usual.
 3. Choose **Export as a new save**, and give the save a name. It is written beside the
    original, and the game lists it under that name in **Load Game**.
+
+For every step with pictures, see [How to use Nautiloid](docs/HOW-TO-USE.md).
 
 ![The save browser](docs/images/browser.png)
 
@@ -75,8 +110,9 @@ the folder that holds one.
 cargo run --release --bin nautiloid-cli -- info "path/to/save folder"
 ```
 
-Run it without arguments for the other commands: `list`, `dump`, `find`, `diff`, `party`,
-`edit`, `tables`, `rows`, `check`, `extract`, `rewrite` and `set`.
+Run it without arguments for the other commands, among them `list`, `dump`, `find`, `diff`,
+`party`, `items`, `edit`, `add`, `tables`, `rows`, `entity`, `pointer-check` and `catalog`.
+[docs/TECHNICAL.md](docs/TECHNICAL.md) says what each is for.
 
 ## Tests
 
