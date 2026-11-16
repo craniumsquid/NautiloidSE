@@ -299,8 +299,14 @@ templates isn't 0; with none in the line, when it has a bag's `ContainerAutoAddO
 - Across 46,000 items in the sample saves, `InventoryType` matched whether an item had an
   inventory for all but 70, mostly remains of broken crates. The Astral Prism ("Mysterious
   Artefact") is one exception: `InventoryType` 4, no inventory in any save. It stays refused,
-  as a second Prism has no use and its quest might react to one. The Firewine Barrel is a
-  container by this rule, and 31 of the 34 carried in the samples have an inventory.
+  as a second Prism has no use and its quest might react to one.
+- Nothing made for throwing is a container: an item whose stats entry fills itself in from
+  `_Thrown`. The Firewine Barrel is the one item this decides. Its template says
+  `InventoryType` 1, and barrels in saves from before Patch 8 have inventories, but none of
+  the 315 in the Patch 8 samples has one, and one added without one loads, breaks into
+  alcohol and explodes. No container on bg3.wiki's list has `_Thrown` stats.
+- The game shows barrels with a weight of 0 in an inventory, its own included, whatever
+  their stats say (40 for a Firewine Barrel). A save holds no weights.
 - An item that stacks is a container only if it comes from `BASE_CONT`, the base template
   for containers. Only two items in the game stack and have an `InventoryType`: a Ribcage,
   from `BASE_CONT`, which bg3.wiki lists as a container; and Wood Bark, an ingredient that

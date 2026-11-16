@@ -269,6 +269,24 @@ fn stats_value<'a>(
     None
 }
 
+/// Whether the stats entry `name` is `base` or fills itself in from it, however far back.
+fn stats_uses(stats: &HashMap<String, StatsEntry>, name: &str, base: &str) -> bool {
+    let mut current = name;
+    for _ in 0..32 {
+        if current == base {
+            return true;
+        }
+        match stats.get(current) {
+            Some(entry) => current = &entry.using,
+            None => return false,
+        }
+    }
+    false
+}
+
+/// The stats entry that things made for throwing fill themselves in from.
+const THROWN: &str = "_Thrown";
+
 /// The texts for the handles in `wanted`, from a language file.
 pub fn read_language(bytes: &[u8], wanted: &HashSet<String>) -> Result<HashMap<String, String>> {
     ensure!(
@@ -416,9 +434,13 @@ impl Catalog {
                 // as a Ribcage does, which bg3.wiki lists as a container. Wood Bark, an
                 // ingredient, says it has an inventory, and the game gives it one more often
                 // than not, but there's nothing to open, and stacks split from it have none.
+                // Nor is anything made for throwing: a Firewine Barrel's template says it
+                // has an inventory, but none of the 315 in the Patch 8 samples has one, and
+                // one added without one works in the game.
                 container: kind == Kind::Object
                     && container(key)
-                    && (max_stack(key) <= 1 || from_container_base(key)),
+                    && (max_stack(key) <= 1 || from_container_base(key))
+                    && !stats_uses(&stats, &stats_name, THROWN),
                 pickable: pickable(key),
             });
         }
@@ -906,7 +928,7 @@ mod tests {
     #[test]
     fn containers_follow_their_inventory_type() {
         let key = |n: u32| format!("cccc0000-0000-0000-0000-{n:012}");
-        let keys: Vec<String> = (1..=10).map(key).collect();
+        let keys: Vec<String> = (1..=11).map(key).collect();
         let item = |k: usize,
                     name: &'static str,
                     parent: Option<usize>,
@@ -955,6 +977,13 @@ mod tests {
                 "Ribcage",
                 Some(8),
                 &[("InventoryType", "7"), ("maxStackAmount", "99")],
+            ))
+            // A barrel of firewine says it has an inventory, but is made for throwing.
+            .child(item(
+                10,
+                "CONT_Barrel_Alcohol_A",
+                Some(0),
+                &[("InventoryType", "1")],
             ))])
         .unwrap();
         let objects: String = [
@@ -971,6 +1000,13 @@ mod tests {
         ]
         .iter()
         .map(|name| format!("new entry \"{name}\"\ntype \"Object\"\n\n"))
+        .chain([
+            "new entry \"_Thrown\"\ntype \"Object\"\n\n".to_owned(),
+            "new entry \"OBJ_Barrel_Filled\"\ntype \"Object\"\nusing \"_Thrown\"\n\n".to_owned(),
+            "new entry \"CONT_Barrel_Alcohol_A\"\ntype \"Object\"\n\
+             using \"OBJ_Barrel_Filled\"\n\n"
+                .to_owned(),
+        ])
         .collect();
         let mut files = HashMap::from([
             ("Public/Shared/RootTemplates/_merged.lsf".to_owned(), shared),
@@ -993,6 +1029,7 @@ mod tests {
         assert!(!container("Potion"));
         assert!(!container("Wood_Bark"), "it stacks");
         assert!(container("Ribcage"), "it stacks, but comes from BASE_CONT");
+        assert!(!container("CONT_Barrel_Alcohol_A"), "made for throwing");
     }
 
     #[test]

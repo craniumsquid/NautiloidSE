@@ -404,6 +404,10 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | Three saves made from an autosave, written with `SaveGameType` 0 | The load menu lists them by their names; autosaves, an export left as one included, are listed as "Autosave 4 - Wilderness" whatever the file is called |
 | Made by the app's own export: a stack of three Scrolls of Lightning Bolt made from a Scroll of Speak with Dead, a stack of Potions of Speed, Phalar Aluve and the Haste Helm for a character; a stack of healing potions and a Spear +1 copied from an NPC's for the camp chest. By the command-line tool: a Scroll of Haste made from an oil | Each loads and works; the scrolls cast. Items made from ones marked as wares were marked as wares too |
 | Made by the app's own export, with the wares bit cleared: the Haste Helm made from an Ignoble Hat marked as wares, and plain copies of a Goblin Scimitar and the Ignoble Hat | Loads; none of the three is marked as wares, and the originals still are |
+| Made from a Rune Slate (generic loot): a Runepowder Barrel; Smokepowder, Oil and Acid Barrels; a Spider Egg Sac and a stack of five Wood Bark | Each loads and is right; the barrels explode. They show a weight of 0, as the game's own barrels do |
+| A Bag of Rotten Food made the same way, from the only template it has, which can't be picked up | A blank slot in the inventory. Items that can't be picked up are no longer offered |
+| A Firewine Barrel made from a Rune Slate, with no inventory of its own; the same made from a carried Water Barrel; a plain copy of that Water Barrel | Each loads, breaks into alcohol and explodes. Weight 0, as for the game's own |
+| A Firewine Barrel and a Runepowder Barrel made without `InventoryItemDataPopulatedComponent` | The same as with it: right value, weight 0, explode |
 | Made in the app from the Honour Mode save, with Gale's ability scores and items changed | Loads from the main menu with the changes in place. With a game running, the load menu refuses it: "You cannot reload a previous save while playing in Single Save mode" |
 
 Every failure looks the same: the save loads to 100%, drops to the title screen, and shows

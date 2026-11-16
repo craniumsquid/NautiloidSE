@@ -149,8 +149,8 @@ What you've picked is listed under **Adding**, at the top of the Inventory tab.
 A few things to know:
 
 - **Bags, chests and other containers can't be added**, nor the few other items the game
-  gives a hidden inventory of their own, such as the Firewine Barrel and the Mysterious
-  Artefact. The other explosive barrels can be added.
+  gives a hidden inventory of their own, such as the Mysterious Artefact. Explosive barrels
+  can be added. Like the game's own, they show a weight of 0.
 - An item marked as a **story item** shows a warning. Quests sometimes expect there to be only
   one of these, so a second one may confuse them.
 - Items that come from **mods** show a rough name made from their internal name, instead of

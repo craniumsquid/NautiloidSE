@@ -76,8 +76,9 @@ character or the camp chest, up to 20 of each per export.
   slot, of the same kind, or any item; the holder's own before the party's, and the party's
   before anyone else's. An equipped, stacked or story item can be copied: the copy is none of
   those, and belongs to the holder (to nobody in the camp chest). Containers are not copied:
-  an item whose templates give it an inventory (`InventoryType`). Explosive barrels come from
-  container templates but aren't containers, and can be added. Only items that can be picked
+  an item whose templates give it an inventory (`InventoryType`), unless it is made for
+  throwing. Explosive barrels come from container templates but aren't containers, and can
+  be added. Only items that can be picked
   up are offered.
 - A scroll keeps its spell in records of its own. A scroll is made from another scroll if
   the save has one, copied without those records, and the game fills the new spell in from
@@ -156,7 +157,11 @@ scroll given a spell record of its own did not work. Round 11 tries the app's ow
 for these, a scroll made from an oil, and exports from an autosave written as manual saves;
 all worked. Items copied from ones marked as wares came out marked too, so new items now have
 that mark cleared; round 12 confirmed it (a copy of a wares item, and an item made from one,
-unmarked, the originals still marked).
+unmarked, the originals still marked). Rounds 13 to 16 were explosive barrels and
+throwables made from a Rune Slate: the Runepowder, Smokepowder, Oil, Acid and Firewine
+barrels load and explode, and show a weight of 0 as the game's own barrels do; a Bag of
+Rotten Food, which can't be picked up, came out as a blank slot, so such items are no longer
+offered.
 
 Phase 0 is built and passes on all eleven sample saves:
 
