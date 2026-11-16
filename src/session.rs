@@ -366,8 +366,8 @@ impl Session {
         };
         if item.container {
             return Err(
-                "Bags, chests and other containers can't be added: a copy would have \
-                        nowhere to keep what goes in it."
+                "The game gives this item an inventory of its own, as it does a bag or a \
+                 chest, and a copy would have none, so it can't be added."
                     .to_owned(),
             );
         }
@@ -1487,7 +1487,7 @@ mod tests {
         let bag = session
             .add_item(hero, "OBJ_Bag_AlchemyPouch", 35.0)
             .unwrap_err();
-        assert!(bag.contains("containers"), "{bag}");
+        assert!(bag.contains("inventory of its own"), "{bag}");
         // The camp chest gets a copy of the hero's rope.
         let chest_rope = session
             .add_item(Holder::CampChest, "OBJ_Rope", 40.0)

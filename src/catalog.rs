@@ -126,9 +126,12 @@ struct Template {
     spell: String,
     /// `maxStackAmount`, when the template says.
     max_stack: Option<u32>,
-    /// Whether the template itself is a container's: the game names them `CONT_...`, and a
-    /// bag has settings for what it takes in.
-    container: bool,
+    /// `InventoryType`, when the template says: 0 for an item with no inventory of its own,
+    /// anything else for a container.
+    inventory_type: Option<i64>,
+    /// Whether the template has a bag's settings for what it takes in. Used only when no
+    /// template in the line says `InventoryType`.
+    bag: bool,
     parent: String,
 }
 
@@ -187,8 +190,8 @@ fn read_templates(bytes: &[u8], into: &mut HashMap<String, Template>) -> Result<
                     .and_then(|v| v.as_i64())
                     .map(|v| v != 0),
                 spell: use_spell(&lsf, node),
-                container: text_of(&lsf, node, "Name").starts_with("CONT_")
-                    || lsf.get(node, "ContainerAutoAddOnPickup").is_some()
+                inventory_type: lsf.get(node, "InventoryType").and_then(|v| v.as_i64()),
+                bag: lsf.get(node, "ContainerAutoAddOnPickup").is_some()
                     || lsf.get(node, "ContainerContentFilterCondition").is_some(),
                 max_stack: lsf
                     .get(node, "maxStackAmount")
@@ -350,9 +353,16 @@ impl Catalog {
         }
         let story = |key: &str| first(&templates, key, |t| t.story).unwrap_or(false);
         let max_stack = |key: &str| first(&templates, key, |t| t.max_stack).unwrap_or(1);
-        // A container if the template or any it comes from is one.
-        let container =
-            |key: &str| first(&templates, key, |t| t.container.then_some(true)).unwrap_or(false);
+        // A container if the nearest `InventoryType` in its line says so. In the saves,
+        // items have an inventory of their own when it does, give or take a few broken crates
+        // and the Astral Prism: a Runepowder Barrel comes from `CONT_` barrels but sets it to
+        // 0, and carried ones have no inventory. Failing that, if it has a bag's settings. A
+        // `CONT_` name alone doesn't make one: throwable Spider Egg Sacs and Bags of Rotten
+        // Food are named so, say nothing of `InventoryType`, and have no inventory.
+        let container = |key: &str| match first(&templates, key, |t| t.inventory_type) {
+            Some(kind) => kind != 0,
+            None => first(&templates, key, |t| t.bag.then_some(true)).unwrap_or(false),
+        };
         let mut items = Vec::new();
         for (key, template) in &templates {
             if template.kind != "item" {
@@ -384,8 +394,11 @@ impl Catalog {
                 story: story(key),
                 spell: inherited(key, |t| &t.spell),
                 max_stack: max_stack(key),
-                // A weapon can inherit a container's settings without being one.
-                container: kind == Kind::Object && container(key),
+                // A weapon can inherit a container's settings without being one, and nothing
+                // that stacks is one: Wood Bark says it has an inventory, and the game gives
+                // it one more often than not, but there's nothing to open, and stacks split
+                // from it have none.
+                container: kind == Kind::Object && max_stack(key) <= 1 && container(key),
             });
         }
 
@@ -607,6 +620,11 @@ pub mod build {
                 "maxStackAmount" => {
                     node.attr(field, DataType::Int, Value::Int(value.parse().unwrap_or(1)))
                 }
+                "InventoryType" => node.attr(
+                    field,
+                    DataType::Byte,
+                    Value::Byte(value.parse().unwrap_or(0)),
+                ),
                 _ => node.attr(field, DataType::FixedString, Value::Text(value.into())),
             };
         }
@@ -850,6 +868,87 @@ mod tests {
         assert_eq!(listed, ["Dagger", "Potion of Healing"]);
         let found: Vec<&str> = catalog.search("POTION").map(|i| i.stats.as_str()).collect();
         assert_eq!(found, ["OBJ_Potion_Healing"]);
+    }
+
+    #[test]
+    fn containers_follow_their_inventory_type() {
+        let key = |n: u32| format!("cccc0000-0000-0000-0000-{n:012}");
+        let keys: Vec<String> = (1..=8).map(key).collect();
+        let item = |k: usize,
+                    name: &'static str,
+                    parent: Option<usize>,
+                    extra: &[(&'static str, &'static str)]| {
+            let mut fields: Vec<(&str, &str)> = vec![("Type", "item"), ("Stats", name)];
+            if let Some(parent) = parent {
+                fields.push(("ParentTemplateId", keys[parent].as_str()));
+            }
+            fields.extend_from_slice(extra);
+            template(&keys[k], name, &fields)
+        };
+        let shared = lsf(&[Node::new("Templates")
+            // A barrel that holds things, as the game's are.
+            .child(item(0, "CONT_Barrel_A", None, &[("InventoryType", "1")]))
+            // A barrel of smokepowder made from it says it holds nothing, and so do the
+            // barrels made from that one in turn.
+            .child(item(
+                1,
+                "CONT_Barrel_Smokepowder_A",
+                Some(0),
+                &[("InventoryType", "0")],
+            ))
+            .child(item(2, "UNI_Runepowder_Barrel", Some(1), &[]))
+            // A barrel that says nothing holds what its parent says.
+            .child(item(3, "CONT_Barrel_Firewine_A", Some(0), &[]))
+            // With no InventoryType anywhere, a bag's settings decide, not the name.
+            .child(item(4, "CONT_Egg_Sac_CombatThrowable", None, &[]))
+            .child(item(
+                5,
+                "Pouch",
+                None,
+                &[("ContainerAutoAddOnPickup", "true")],
+            ))
+            .child(item(6, "Potion", None, &[]))
+            // An ingredient that says it has an inventory, but stacks.
+            .child(item(
+                7,
+                "Wood_Bark",
+                None,
+                &[("InventoryType", "9"), ("maxStackAmount", "99")],
+            ))])
+        .unwrap();
+        let objects: String = [
+            "CONT_Barrel_A",
+            "CONT_Barrel_Smokepowder_A",
+            "UNI_Runepowder_Barrel",
+            "CONT_Barrel_Firewine_A",
+            "CONT_Egg_Sac_CombatThrowable",
+            "Pouch",
+            "Potion",
+            "Wood_Bark",
+        ]
+        .iter()
+        .map(|name| format!("new entry \"{name}\"\ntype \"Object\"\n\n"))
+        .collect();
+        let mut files = HashMap::from([
+            ("Public/Shared/RootTemplates/_merged.lsf".to_owned(), shared),
+            (
+                "Public/Shared/Stats/Generated/Data/Object.txt".to_owned(),
+                objects.into_bytes(),
+            ),
+        ]);
+        let catalog = Catalog::build(|name| Ok(files.remove(name))).unwrap();
+        let container = |stats: &str| catalog.by_stats(stats).unwrap().container;
+        assert!(container("CONT_Barrel_A"));
+        assert!(!container("CONT_Barrel_Smokepowder_A"));
+        assert!(
+            !container("UNI_Runepowder_Barrel"),
+            "an explosive, not a container"
+        );
+        assert!(container("CONT_Barrel_Firewine_A"));
+        assert!(!container("CONT_Egg_Sac_CombatThrowable"), "a throwable");
+        assert!(container("Pouch"));
+        assert!(!container("Potion"));
+        assert!(!container("Wood_Bark"), "it stacks");
     }
 
     #[test]

@@ -287,6 +287,24 @@ chosen in the app):
   item, rarity and category, and the main template of each game name (`RootTemplate`);
 - the English text, `Localization/English/english.loca`, for the names and descriptions.
 
+An item is a container, and can't be added, when the nearest `InventoryType` in its line of
+templates isn't 0; with none in the line, when it has a bag's `ContainerAutoAddOnPickup` or
+`ContainerContentFilterCondition`. Names don't decide it:
+
+- Explosive barrels (Runepowder, Smokepowder, Oil, Acid) come from `CONT_Barrel_A` but set
+  `InventoryType` to 0, and the ones the party carries in the sample saves have no inventory
+  (`game.inventory.v0.OwnerComponent`).
+- Throwable Spider Egg Sacs and Bags of Rotten Food are `CONT_..._CombatThrowable`, say
+  nothing of `InventoryType`, and have no inventory.
+- Across 46,000 items in the sample saves, `InventoryType` matched whether an item had an
+  inventory for all but 70, mostly remains of broken crates. The Astral Prism ("Mysterious
+  Artefact") is one exception: `InventoryType` 4, no inventory in any save. It stays refused,
+  as a second Prism has no use and its quest might react to one. The Firewine Barrel is a
+  container by this rule, and 31 of the 34 carried in the samples have an inventory.
+- An item that stacks is never a container: Wood Bark sets `InventoryType` 9 and the game
+  gives it an inventory more often than not, but there is nothing to open, and stacks split
+  from it have none.
+
 It reads only those files out of the packages, not the packages whole. The list offered for
 adding is one item per game name that has an English name, leaving out templates whose names
 start with `%%%`, which the game doesn't use. Items added by mods aren't in it: their
