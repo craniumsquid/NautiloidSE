@@ -364,6 +364,11 @@ impl Session {
             Some(_) => 1,
             None => 2,
         };
+        if !item.pickable {
+            return Err(
+                "This can't be picked up in the game, so it can't go in an inventory.".to_owned(),
+            );
+        }
         if item.container {
             return Err(
                 "The game gives this item an inventory of its own, as it does a bag or a \
@@ -1483,6 +1488,12 @@ mod tests {
         let plan = session.pattern_for(hero, &fireball).unwrap();
         assert!(plan.spell.is_some());
         assert_eq!(plan.donor, uuid(ROPE));
+        // Something nobody can pick up, such as a Bag of Rotten Food meant for throwing in a
+        // fight, would be a blank slot in an inventory.
+        let mut thrown = catalog.by_stats("OBJ_Rope").unwrap().clone();
+        thrown.pickable = false;
+        let why = session.pattern_for(hero, &thrown).unwrap_err();
+        assert!(why.contains("can't be picked up"), "{why}");
         // A bag can't be added: a copy would have no inventory of its own.
         let bag = session
             .add_item(hero, "OBJ_Bag_AlchemyPouch", 35.0)

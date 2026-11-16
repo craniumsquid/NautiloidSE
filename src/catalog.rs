@@ -98,6 +98,9 @@ pub struct CatalogItem {
     pub max_stack: u32,
     /// Whether it holds other items: a bag, a pouch, a chest.
     pub container: bool,
+    /// Whether it can be picked up (`CanBePickedUp`, from its templates). Every item the
+    /// sample saves have in an inventory can; one that can't shows as a blank slot.
+    pub pickable: bool,
 }
 
 /// The game's item templates.
@@ -132,6 +135,8 @@ struct Template {
     /// Whether the template has a bag's settings for what it takes in. Used only when no
     /// template in the line says `InventoryType`.
     bag: bool,
+    /// `CanBePickedUp`, when the template says.
+    pickable: Option<bool>,
     parent: String,
 }
 
@@ -193,6 +198,10 @@ fn read_templates(bytes: &[u8], into: &mut HashMap<String, Template>) -> Result<
                 inventory_type: lsf.get(node, "InventoryType").and_then(|v| v.as_i64()),
                 bag: lsf.get(node, "ContainerAutoAddOnPickup").is_some()
                     || lsf.get(node, "ContainerContentFilterCondition").is_some(),
+                pickable: lsf
+                    .get(node, "CanBePickedUp")
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v != 0),
                 max_stack: lsf
                     .get(node, "maxStackAmount")
                     .and_then(|v| v.as_i64())
@@ -353,6 +362,7 @@ impl Catalog {
         }
         let story = |key: &str| first(&templates, key, |t| t.story).unwrap_or(false);
         let max_stack = |key: &str| first(&templates, key, |t| t.max_stack).unwrap_or(1);
+        let pickable = |key: &str| first(&templates, key, |t| t.pickable).unwrap_or(false);
         // A container if the nearest `InventoryType` in its line says so. In the saves,
         // items have an inventory of their own when it does, give or take a few broken crates
         // and the Astral Prism: a Runepowder Barrel comes from `CONT_` barrels but sets it to
@@ -399,6 +409,7 @@ impl Catalog {
                 // it one more often than not, but there's nothing to open, and stacks split
                 // from it have none.
                 container: kind == Kind::Object && max_stack(key) <= 1 && container(key),
+                pickable: pickable(key),
             });
         }
 
@@ -425,17 +436,25 @@ impl Catalog {
             .enumerate()
             .map(|(i, item)| (item.template.clone(), i))
             .collect();
-        // For a game name, the template its stats entry names, else any that uses it.
+        // For a game name, the template its stats entry names, else any that uses it; but
+        // one that can be picked up before one that can't. A thrown Bag of Rotten Food is a
+        // world object that can't be, and added to an inventory it shows as a blank slot.
         let mut by_stats: HashMap<String, usize> = HashMap::new();
         for (i, item) in items.iter().enumerate() {
             if !item.stats.is_empty() {
-                by_stats.entry(item.stats.clone()).or_insert(i);
+                let entry = by_stats.entry(item.stats.clone()).or_insert(i);
+                if item.pickable && !items[*entry].pickable {
+                    *entry = i;
+                }
             }
         }
         for name in stats.keys() {
             let root = stats_value(&stats, name, "RootTemplate").map(str::to_lowercase);
             if let Some(&i) = root.and_then(|root| by_template.get(&root)) {
-                by_stats.insert(name.clone(), i);
+                let current = by_stats.get(name).map(|&c| items[c].pickable);
+                if items[i].pickable || current != Some(true) {
+                    by_stats.insert(name.clone(), i);
+                }
             }
         }
         let mut listed: Vec<usize> = by_stats
@@ -447,6 +466,7 @@ impl Catalog {
                 !item.display.is_empty()
                     && !item.display.starts_with("%%%")
                     && item.kind != Kind::Other
+                    && item.pickable
             })
             .collect::<HashSet<usize>>()
             .into_iter()
@@ -614,7 +634,7 @@ pub mod build {
                         handle: value.into(),
                     },
                 ),
-                "StoryItem" | "ContainerAutoAddOnPickup" => {
+                "StoryItem" | "ContainerAutoAddOnPickup" | "CanBePickedUp" => {
                     node.attr(field, DataType::Bool, Value::Bool(value == "true"))
                 }
                 "maxStackAmount" => {
@@ -694,6 +714,7 @@ pub mod build {
                 ("Type", "item"),
                 ("Stats", item.stats),
                 ("DisplayName", handle.as_str()),
+                ("CanBePickedUp", "true"),
             ];
             if item.max_stack > 1 {
                 fields.push(("maxStackAmount", &stack));
@@ -776,6 +797,7 @@ mod tests {
                 "BASE_Potion",
                 &[
                     ("Type", "item"),
+                    ("CanBePickedUp", "true"),
                     ("Icon", "Item_Potion_New"),
                     ("StoryItem", "true"),
                     ("maxStackAmount", "100"),
@@ -786,6 +808,7 @@ mod tests {
                 "WPN_Dagger_A",
                 &[
                     ("Type", "item"),
+                    ("CanBePickedUp", "true"),
                     ("Stats", "WPN_Dagger"),
                     ("DisplayName", "h5"),
                 ],
@@ -949,6 +972,65 @@ mod tests {
         assert!(container("Pouch"));
         assert!(!container("Potion"));
         assert!(!container("Wood_Bark"), "it stacks");
+    }
+
+    #[test]
+    fn offers_only_items_that_can_be_picked_up() {
+        let thing = |key: &str, name: &str, stats: &str, handle: &str, pickable: Option<&str>| {
+            let mut fields = vec![("Type", "item"), ("Stats", stats), ("DisplayName", handle)];
+            if let Some(pickable) = pickable {
+                fields.push(("CanBePickedUp", pickable));
+            }
+            template(key, name, &fields)
+        };
+        let shared = lsf(&[Node::new("Templates")
+            // A bag of rotten food to throw in a fight, which nobody can pick up, is the
+            // template the game name's stats entry names; one that can be carried uses the
+            // same game name.
+            .child(thing(
+                "dddd0000-0000-0000-0000-000000000001",
+                "Bag_Thrown",
+                "OBJ_Bag_Rotten",
+                "h1",
+                None,
+            ))
+            .child(thing(
+                "dddd0000-0000-0000-0000-000000000002",
+                "Bag_Carried",
+                "OBJ_Bag_Rotten",
+                "h1",
+                Some("true"),
+            ))
+            // A statue nobody can pick up has no other template.
+            .child(thing(
+                "dddd0000-0000-0000-0000-000000000003",
+                "Statue",
+                "OBJ_Statue",
+                "h2",
+                Some("false"),
+            ))])
+        .unwrap();
+        let objects = "new entry \"OBJ_Bag_Rotten\"\ntype \"Object\"\n\
+                       data \"RootTemplate\" \"dddd0000-0000-0000-0000-000000000001\"\n\n\
+                       new entry \"OBJ_Statue\"\ntype \"Object\"\n";
+        let mut files = HashMap::from([
+            ("Public/Shared/RootTemplates/_merged.lsf".to_owned(), shared),
+            (
+                "Public/Shared/Stats/Generated/Data/Object.txt".to_owned(),
+                objects.as_bytes().to_vec(),
+            ),
+            (
+                LANGUAGE.to_owned(),
+                language(&[("h1", "Bag of Rotten Food"), ("h2", "Statue")]),
+            ),
+        ]);
+        let catalog = Catalog::build(|name| Ok(files.remove(name))).unwrap();
+        let bag = catalog.by_stats("OBJ_Bag_Rotten").unwrap();
+        assert_eq!(bag.name, "Bag_Carried", "the one that can be carried");
+        assert!(bag.pickable);
+        assert!(!catalog.by_stats("OBJ_Statue").unwrap().pickable);
+        let listed: Vec<&str> = catalog.listed().map(|i| i.name.as_str()).collect();
+        assert_eq!(listed, ["Bag_Carried"]);
     }
 
     #[test]

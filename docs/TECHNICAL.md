@@ -306,8 +306,12 @@ templates isn't 0; with none in the line, when it has a bag's `ContainerAutoAddO
   from it have none.
 
 It reads only those files out of the packages, not the packages whole. The list offered for
-adding is one item per game name that has an English name, leaving out templates whose names
-start with `%%%`, which the game doesn't use. Items added by mods aren't in it: their
+adding is one item per game name that has an English name and can be picked up, leaving out
+templates whose names start with `%%%`, which the game doesn't use. `CanBePickedUp` comes
+from the templates like the rest: all 45,398 items carried in the sample saves have it, and
+an item without it, such as the Bag of Rotten Food that's thrown in a fight, shows as a blank
+slot in an inventory. Where several templates share a game name, one that can be picked up
+is preferred. Items added by mods aren't in it: their
 templates and text are in the mods' own packages, which the editor doesn't read yet.
 
 ## Testing
