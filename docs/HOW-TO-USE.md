@@ -11,7 +11,7 @@ The pictures here use made-up sample saves, so the names and numbers won't match
 
 ## Contents
 
-1. [Get the app](#1-get-the-app)
+1. [Start the app](#1-start-the-app)
 2. [Open a save](#2-open-a-save)
 3. [Change your party](#3-change-your-party)
 4. [Check and undo your changes](#4-check-and-undo-your-changes)
@@ -29,17 +29,17 @@ The pictures here use made-up sample saves, so the names and numbers won't match
 - You can leave the game running. Before loading your new save, go back to the game's main
   menu, so it sees the new save.
 
-## 1. Get the app
+## 1. Start the app
 
-1. Go to the project's page on GitHub and click **Actions** at the top.
-2. Click the newest run called **CI** that has a green tick.
-3. Scroll down to **Artifacts** and download the one for your computer:
-   `nautiloid-save-editor-windows-x64` for Windows, `nautiloid-save-editor-linux-x64` for
-   Linux or a Steam Deck.
-4. Unzip it, and run `nautiloid-save-editor`.
+1. Unzip the download into a folder of its own, anywhere you like. Nothing needs installing.
+2. Open that folder and run **nautiloid-save-editor** (`nautiloid-save-editor.exe` on
+   Windows, **Nautiloid Save Editor** on a Mac).
 
 On Windows, a blue box saying "Windows protected your PC" may appear the first time, because
 the app isn't signed. Click **More info**, then **Run anyway**.
+
+On Windows and Linux the folder also holds **nautiloid-cli**, a tool for looking inside saves
+from a terminal. You don't need it to use the editor.
 
 ## 2. Open a save
 
@@ -206,4 +206,4 @@ playthrough, and a second one beside it hasn't been tried. Keep a copy of your s
 somewhere safe first.
 
 **Something else went wrong.** Load your original save: it was never changed. Then report
-the problem on the project's GitHub page, saying what you changed.
+the problem where you downloaded the app, saying what you changed.

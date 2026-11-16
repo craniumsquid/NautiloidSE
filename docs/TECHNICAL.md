@@ -365,6 +365,13 @@ whose commit message contains `[build]`, and attaches the builds to the run. mac
 for version tags, or by hand with its box ticked. `packaging/make-icons.sh` makes the icons
 from `assets/icon/source.webp`.
 
+Every download includes the user guide as `How to use Nautiloid.pdf`. CI's `guide` job makes
+it on every push with `packaging/make-guide.py`, which turns `docs/HOW-TO-USE.md` into one HTML
+page, with the pictures and the app's fonts inside it, and prints that with Chrome. To make it
+locally: `pip install markdown==3.7`, then `python3 packaging/make-guide.py <folder>`, with
+`--browser <path>` if Chrome or Chromium isn't on the path. The guide's text shouldn't point at
+where the app is hosted: it goes out with downloads from wherever the app is published.
+
 ## Not done
 
 - Names for items that mods add.

@@ -72,6 +72,8 @@ page, open the latest **CI** run and download `nautiloid-save-editor-windows-x64
 - **macOS:** built only for version tags, or when the CI workflow is run by hand with the macOS
   box ticked. That build has not been run on a Mac yet.
 
+Each download includes the guide as a PDF, `How to use Nautiloid.pdf`.
+
 Or build it from source with [Rust](https://rustup.rs) 1.88 or later:
 
 ```bash
