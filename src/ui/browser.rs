@@ -2,7 +2,7 @@
 
 use super::thumbs::Thumbnails;
 use super::widgets::{self, Kind};
-use super::{theme, Action};
+use super::{theme, Action, FolderFor};
 use crate::save::Support;
 use crate::saves::{self, Campaign, Listed, SaveKind, SaveSummary, Unreadable};
 use eframe::egui::{
@@ -154,7 +154,12 @@ pub fn show(
                 drop_zone(
                     ui,
                     "Your saves folder was not found",
-                    "Drop a save folder or your Savegames\\Story folder here, or choose the folder.",
+                    if super::can_drop() {
+                        "Drop a save folder or your Savegames\\Story folder here, or choose the \
+                         folder."
+                    } else {
+                        "Choose the folder your saves are in, or type its path."
+                    },
                     hovering_files,
                     actions,
                 );
@@ -162,7 +167,11 @@ pub fn show(
                 drop_zone(
                     ui,
                     "No saves in this folder",
-                    "Drop a save folder here, or choose another folder.",
+                    if super::can_drop() {
+                        "Drop a save folder here, or choose another folder."
+                    } else {
+                        "Choose another folder, or type its path."
+                    },
                     hovering_files,
                     actions,
                 );
@@ -196,11 +205,14 @@ fn folder_bar(ui: &mut Ui, state: &BrowserState, actions: &mut Vec<Action>) {
                         Some(dir) => dir.display().to_string(),
                         None => "Not set".to_owned(),
                     };
-                    ui.set_max_width(ui.available_width() - 300.0);
+                    ui.set_max_width(ui.available_width() - 420.0);
                     widgets::clipped(ui, &path, theme::mono(13.5), theme::TEXT_SOFT)
                         .on_hover_text(&path);
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if widgets::button(ui, "Type a path…", Kind::Quiet).clicked() {
+                        actions.push(Action::AskFolderPath(FolderFor::Saves));
+                    }
                     if widgets::button(ui, "Change folder…", Kind::Secondary).clicked() {
                         actions.push(Action::PickFolder);
                     }
@@ -246,12 +258,15 @@ fn drop_zone(ui: &mut Ui, title: &str, detail: &str, hovering: bool, actions: &m
             .max_rect(rect.shrink(24.0))
             .layout(Layout::top_down(Align::Center)),
     );
-    content.add_space((height - 150.0).max(0.0) / 2.0);
+    content.add_space((height - 190.0).max(0.0) / 2.0);
     content.label(egui::RichText::new(title).font(theme::semibold(20.0)));
     content.label(egui::RichText::new(detail).color(theme::MUTED));
     content.add_space(10.0);
     if widgets::button(&mut content, "Choose folder…", Kind::Primary).clicked() {
         actions.push(Action::PickFolder);
+    }
+    if widgets::button(&mut content, "Type a path…", Kind::Quiet).clicked() {
+        actions.push(Action::AskFolderPath(FolderFor::Saves));
     }
 }
 

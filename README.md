@@ -73,7 +73,9 @@ The app is built for Windows, Linux and macOS whenever `main` changes. On the re
 - **Windows:** unzip and run `nautiloid-save-editor.exe`. The app isn't signed, so Windows may
   show "Windows protected your PC" the first time; choose **More info**, then **Run anyway**.
 - **Linux and Steam Deck:** unpack the archive and run `nautiloid-save-editor`. It needs a
-  desktop with OpenGL and `libxkbcommon-x11`, which desktop systems have.
+  desktop with OpenGL and `libxkbcommon-x11`, which desktop systems have. Choosing a folder
+  uses the desktop's file chooser (the XDG portal, or `zenity`); without one, type the
+  folder's path. Dropping a folder onto the window works under X11, not Wayland.
 - **macOS (Apple silicon):** unzip it and open `Nautiloid Save Editor.app`. The app isn't
   notarized, so the first time macOS refuses to open it: choose **Done**, then **Open Anyway**
   in System Settings → Privacy & Security. That build has not been run on a Mac yet.
@@ -90,7 +92,8 @@ cargo run --release
 ## Using it
 
 1. Start the app. It looks for the game's saves folder and lists the saves by campaign. If it
-   doesn't find the folder, choose it, or drop a save's folder onto the window.
+   doesn't find the folder, choose it, type its path, or drop a save's folder onto the
+   window.
 2. Open a save and change what you want. Every change is listed in the Changes panel, where
    each can be reverted on its own. Undo and redo work as usual.
 3. Choose **Export as a new save**, and give the save a name. It is written beside the
@@ -106,7 +109,8 @@ The game keeps its saves here:
 | --- | --- |
 | Windows | `%LOCALAPPDATA%\Larian Studios\Baldur's Gate 3\PlayerProfiles\Public\Savegames\Story` |
 | macOS | `~/Documents/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/Savegames/Story` |
-| Linux, Steam Deck | the same path as Windows, inside the game's Proton prefix (`steamapps/compatdata/1086940`) |
+| Steam Deck, the game's own Linux build | `~/.local/share/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/Savegames/Story` |
+| Linux and Steam Deck under Proton | the same path as Windows, inside the game's Proton prefix (`steamapps/compatdata/1086940`, in the Steam library the game is installed in) |
 
 ## Looking inside a save
 

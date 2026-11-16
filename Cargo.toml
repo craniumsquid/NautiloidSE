@@ -1,6 +1,6 @@
 [package]
 name = "nautiloid-save-editor"
-version = "1.1.1"
+version = "1.1.2"
 edition = "2021"
 rust-version = "1.88"
 license = "GPL-3.0-only"
@@ -32,8 +32,9 @@ serde_json = "1"
 # The interface.
 eframe = "0.29"
 # The system's folder picker. On Linux it goes through the desktop portal, which needs no
-# GTK at build time.
-rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+# GTK at build time. async-std, not tokio: with tokio the picker panics unless the app runs
+# a tokio runtime, which it doesn't, so choosing a folder closed the app.
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
 # Decodes the .WebP screenshot beside each save.
 image = { version = "0.25", default-features = false, features = ["webp"] }
 

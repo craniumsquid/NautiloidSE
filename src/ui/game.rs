@@ -1,7 +1,7 @@
 //! The game's own files, read in the background for the names players see.
 
 use super::widgets::{self, Kind};
-use super::{theme, Action};
+use super::{theme, Action, FolderFor};
 use crate::catalog::Catalog;
 use eframe::egui::{self, Ui};
 use std::path::{Path, PathBuf};
@@ -106,6 +106,9 @@ pub fn notice(ui: &mut Ui, game: &GameFiles, actions: &mut Vec<Action>) {
                 && widgets::button(ui, "Choose game folder…", Kind::Secondary).clicked()
             {
                 actions.push(Action::PickGameFolder);
+            }
+            if !game.is_loading() && widgets::button(ui, "Type a path…", Kind::Quiet).clicked() {
+                actions.push(Action::AskFolderPath(FolderFor::Game));
             }
         });
     });

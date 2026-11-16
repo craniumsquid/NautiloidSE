@@ -616,6 +616,7 @@ pub fn detect_game() -> Option<PathBuf> {
     if let Some(home) = var("HOME") {
         steam_roots.push(home.join(".local/share/Steam"));
         steam_roots.push(home.join(".steam/steam"));
+        steam_roots.push(home.join(".var/app/com.valvesoftware.Steam/.local/share/Steam"));
         steam_roots.push(home.join("Library/Application Support/Steam"));
     }
     let mut libraries = Vec::new();

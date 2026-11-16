@@ -102,6 +102,39 @@ impl Tab {
     }
 }
 
+/// What a folder is being asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FolderFor {
+    /// The folder the saves are in.
+    Saves,
+    /// The folder the game is installed in.
+    Game,
+}
+
+/// Whether a folder dropped on the window reaches the app. Not under Wayland: the windowing
+/// library doesn't pass file drops on there.
+pub fn can_drop() -> bool {
+    !(cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_some())
+}
+
+/// A folder's path as someone typed or pasted it: without the quotes a file manager's "copy
+/// path" puts around it or a `file://` in front, and with `~` as their home folder.
+pub fn typed_path(text: &str, home: Option<&std::path::Path>) -> PathBuf {
+    let mut text = text.trim();
+    for quote in ['"', '\''] {
+        if let Some(inner) = text.strip_prefix(quote).and_then(|t| t.strip_suffix(quote)) {
+            text = inner.trim();
+        }
+    }
+    let text = text.strip_prefix("file://").unwrap_or(text);
+    match (text.strip_prefix('~'), home) {
+        (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with(['/', '\\']) => {
+            home.join(rest.trim_start_matches(['/', '\\']))
+        }
+        _ => PathBuf::from(text),
+    }
+}
+
 /// Something a person did, to be applied once the frame is drawn.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -130,6 +163,10 @@ pub enum Action {
     Reveal(PathBuf),
     /// Ask where the game is, for the names players see.
     PickGameFolder,
+    /// Ask for a folder's path as text, for when there is no folder picker to use.
+    AskFolderPath(FolderFor),
+    /// Use the path typed for this.
+    UseFolderPath(FolderFor, String),
     /// Choose items from the game's to add for this holder, the search starting with this.
     AskAddItem(Holder, String),
     /// Add one more of the item with these stats for this holder.
@@ -631,6 +668,52 @@ impl EditorApp {
                     }
                 }
             }
+            Action::AskFolderPath(what) => {
+                let path = match (what, &self.browser.dir) {
+                    (FolderFor::Saves, Some(dir)) => dir.display().to_string(),
+                    _ => String::new(),
+                };
+                // So that the cursor goes in the path each time the dialog opens.
+                ctx.data_mut(|d| d.remove::<bool>(egui::Id::new(dialogs::FOLDER_PATH_FOCUSED)));
+                self.dialog = Some(Dialog::FolderPath {
+                    what,
+                    path,
+                    error: None,
+                });
+            }
+            Action::UseFolderPath(what, text) => {
+                let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
+                let home = var("HOME").or_else(|| var("USERPROFILE"));
+                let path = typed_path(&text, home.as_deref());
+                let problem = if !path.is_dir() {
+                    Some("There is no folder at that path.".to_owned())
+                } else {
+                    match what {
+                        FolderFor::Saves => {
+                            self.dialog = None;
+                            self.apply(ctx, Action::SetFolder(path), time);
+                            None
+                        }
+                        FolderFor::Game => match game::data_folder(&path) {
+                            Some(data) => {
+                                self.dialog = None;
+                                self.game = game::GameFiles::start(data);
+                                None
+                            }
+                            None => Some(
+                                "That folder doesn't hold the game's files. Give the Baldurs \
+                                 Gate 3 folder, or the Data folder inside it."
+                                    .to_owned(),
+                            ),
+                        },
+                    }
+                };
+                if let (Some(problem), Some(Dialog::FolderPath { error, .. })) =
+                    (problem, &mut self.dialog)
+                {
+                    *error = Some(problem);
+                }
+            }
             Action::PickFolder => {
                 let start = self.browser.dir.clone();
                 if let Some(dir) = self
@@ -878,4 +961,40 @@ fn save_card(ui: &mut Ui, session: &Session, thumbs: &mut Thumbnails) {
                     );
                 });
         });
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::typed_path;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn reads_a_typed_path() {
+        let home = Path::new("/home/deck");
+        let typed = |text: &str| typed_path(text, Some(home));
+        assert_eq!(
+            typed("  /mnt/games/Story \n"),
+            PathBuf::from("/mnt/games/Story")
+        );
+        // As file managers copy it: in quotes, or as an address.
+        assert_eq!(
+            typed("\"/mnt/My Games/Story\""),
+            PathBuf::from("/mnt/My Games/Story")
+        );
+        assert_eq!(typed("'/mnt/games'"), PathBuf::from("/mnt/games"));
+        assert_eq!(typed("file:///mnt/games"), PathBuf::from("/mnt/games"));
+        // The home folder.
+        assert_eq!(
+            typed("~/.local/share/Larian Studios"),
+            PathBuf::from("/home/deck/.local/share/Larian Studios")
+        );
+        assert_eq!(typed("~"), PathBuf::from("/home/deck"));
+        assert_eq!(typed("~other/x"), PathBuf::from("~other/x"));
+        assert_eq!(typed_path("~/x", None), PathBuf::from("~/x"));
+        // A Windows path is left as it is.
+        assert_eq!(
+            typed("C:\\Users\\me\\Saves"),
+            PathBuf::from("C:\\Users\\me\\Saves")
+        );
+    }
 }

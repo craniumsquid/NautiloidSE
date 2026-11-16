@@ -62,16 +62,21 @@ When the app starts, it finds your saves by itself and shows them, grouped by pl
    (**Manual**), a **Quick** save or an **Auto** save. A green **✓ Patch 8** means it can be
    changed.
 
-Can't see your saves? Click **Change folder…** and pick the folder the game keeps them in:
+Can't see your saves? Click **Change folder…** and pick the folder the game keeps them in,
+or click **Type a path…** and type or paste its path:
 
 | Computer | Folder |
 | --- | --- |
 | Windows | `%LOCALAPPDATA%\Larian Studios\Baldur's Gate 3\PlayerProfiles\Public\Savegames\Story` |
 | Mac | `~/Documents/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/Savegames/Story` |
-| Linux, Steam Deck | The Windows folder, inside `steamapps/compatdata/1086940` |
+| Steam Deck, with the game's own Linux version | `~/.local/share/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/Savegames/Story` |
+| Linux and Steam Deck, with the Windows version | The Windows folder, inside `steamapps/compatdata/1086940` in the Steam library the game is in |
 
 On Windows you can paste the first line into the address bar of File Explorer. You can also
 drag a single save's folder onto the app's window to open it.
+
+On Linux, **Change folder…** needs your desktop's file chooser. If nothing opens, use **Type
+a path…** instead. Dragging a folder onto the window doesn't work under Wayland.
 
 ## 3. Change your party
 

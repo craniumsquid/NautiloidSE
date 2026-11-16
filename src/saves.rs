@@ -342,18 +342,31 @@ fn game_data_folders(home: Option<&Path>, local_app_data: Option<&Path>) -> Vec<
         out.push(game(home.join("AppData").join("Local")));
         // macOS.
         out.push(game(home.join("Documents")));
-        // Linux and Steam Deck: the game runs under Proton, in Steam's Windows prefix.
+        // Steam Deck, with the game's own Linux build (since Hotfix 34).
+        out.push(game(home.join(".local/share")));
+        // Linux and Steam Deck under Proton: in Steam's Windows prefix, which is in the
+        // library the game is installed in. That can be on another drive.
         for steam in [
             ".local/share/Steam",
             ".steam/steam",
             ".var/app/com.valvesoftware.Steam/.local/share/Steam",
         ] {
-            out.push(game(
-                home.join(steam)
-                    .join("steamapps/compatdata")
-                    .join(STEAM_APP_ID)
-                    .join("pfx/drive_c/users/steamuser/AppData/Local"),
-            ));
+            let steam = home.join(steam);
+            let mut libraries = vec![steam.clone()];
+            if let Ok(list) = std::fs::read_to_string(steam.join("steamapps/libraryfolders.vdf")) {
+                libraries.extend(crate::catalog::steam_library_paths(&list));
+            }
+            for library in libraries {
+                let prefix = game(
+                    library
+                        .join("steamapps/compatdata")
+                        .join(STEAM_APP_ID)
+                        .join("pfx/drive_c/users/steamuser/AppData/Local"),
+                );
+                if !out.contains(&prefix) {
+                    out.push(prefix);
+                }
+            }
         }
     }
     out
@@ -671,6 +684,32 @@ mod tests {
             first_existing(Some(&home), None),
             Some(data.join("PlayerProfiles/Public/Savegames/Story"))
         );
+
+        // The game's own Linux build on a Steam Deck keeps its saves outside Steam, and is
+        // looked for first: someone who has both has moved on from Proton.
+        let native = home
+            .join(".local/share/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public")
+            .join("Savegames/Story");
+        std::fs::create_dir_all(&native).unwrap();
+        assert_eq!(first_existing(Some(&home), None), Some(native.clone()));
+        std::fs::remove_dir_all(home.join(".local/share/Larian Studios")).unwrap();
+
+        // A game installed in a Steam library on another drive has its prefix there.
+        std::fs::remove_dir_all(home.join(".local/share/Steam/steamapps/compatdata")).unwrap();
+        let library = home.join("mnt/games");
+        std::fs::write(
+            home.join(".local/share/Steam/steamapps/libraryfolders.vdf"),
+            format!(
+                "\"libraryfolders\"\n{{\n\t\"1\"\n\t{{\n\t\t\"path\"\t\t\"{}\"\n\t}}\n}}\n",
+                library.display()
+            ),
+        )
+        .unwrap();
+        let elsewhere = library
+            .join("steamapps/compatdata/1086940/pfx/drive_c/users/steamuser/AppData/Local")
+            .join("Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/Savegames/Story");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        assert_eq!(first_existing(Some(&home), None), Some(elsewhere));
 
         // Windows' own folder wins when it exists.
         let local = home.join("AppData/Local");

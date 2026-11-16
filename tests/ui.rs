@@ -595,6 +595,35 @@ fn says_why_a_save_cannot_be_opened() {
 }
 
 #[test]
+fn a_saves_folder_can_be_given_as_a_typed_path() {
+    let dir = temp_dir("typed");
+    sample_saves(&dir);
+    let mut ui = Harness::new(None, WINDOW);
+    assert!(ui.sees("Your saves folder was not found"));
+    // The folder picker finds nothing to show itself with, as on a Linux desktop without
+    // one: nothing happens, and the app carries on.
+    ui.click("Choose folder…");
+    assert!(ui.sees("Your saves folder was not found"));
+
+    // A path that isn't a folder is refused, and the dialog stays for another try.
+    ui.click("Type a path…");
+    assert!(ui.sees("Your saves folder's path"));
+    ui.type_text("/nowhere/at/all");
+    ui.click("Use this folder");
+    assert!(ui.sees("There is no folder at that path."));
+    ui.snapshot("00b-type-a-path");
+
+    // The real one, on a second go, pasted with the quotes a file manager puts around it.
+    ui.click("Cancel");
+    ui.click("Type a path…");
+    ui.type_text(&format!("\"{}\"", dir.display()));
+    ui.click("Use this folder");
+    assert!(!ui.sees("Your saves folder's path"), "the dialog closed");
+    assert!(ui.sees("6 saves in 2 campaigns"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn finds_saves_by_folder_choice_drop_and_search() {
     let dir = temp_dir("folder");
     sample_saves(&dir);

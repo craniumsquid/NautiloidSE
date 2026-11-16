@@ -2,7 +2,7 @@
 //! saying what went wrong.
 
 use super::widgets::{self, Kind};
-use super::{theme, Action};
+use super::{theme, Action, FolderFor};
 use crate::catalog::CatalogItem;
 use crate::party::Holder;
 use crate::session::Session;
@@ -36,6 +36,13 @@ pub enum Dialog {
     Unexported { then: After },
     /// Choosing items from the game's to add to what someone holds.
     AddItem { holder: Holder, query: String },
+    /// Asking for a folder's path as text.
+    FolderPath {
+        what: FolderFor,
+        path: String,
+        /// Why the last path wasn't taken.
+        error: Option<String>,
+    },
     /// Something could not be done.
     Problem { title: String, detail: String },
 }
@@ -86,7 +93,7 @@ pub fn show(
                 .inner_margin(Margin::same(24.0))
                 .show(ui, |ui| {
                     ui.set_width(match dialog {
-                        Dialog::AddItem { .. } => 640.0,
+                        Dialog::AddItem { .. } | Dialog::FolderPath { .. } => 640.0,
                         _ => 460.0,
                     });
                     ui.spacing_mut().item_spacing.y = 10.0;
@@ -97,6 +104,9 @@ pub fn show(
                         Dialog::Unexported { then } => unexported(ui, then, session, actions),
                         Dialog::AddItem { holder, query } => {
                             add_item(ui, *holder, query, session, actions)
+                        }
+                        Dialog::FolderPath { what, path, error } => {
+                            folder_path(ui, *what, path, error, actions)
                         }
                         Dialog::Problem { title, detail } => problem(ui, title, detail, actions),
                     }
@@ -191,6 +201,59 @@ fn export(
         if widgets::button(ui, "Cancel", Kind::Quiet).clicked() {
             actions.push(Action::CloseDialog);
             ui.data_mut(|d| d.remove::<bool>(focused));
+        }
+    });
+}
+
+/// Where the path dialog notes that it has put the cursor in its field.
+pub const FOLDER_PATH_FOCUSED: &str = "folder-path-focused";
+
+fn folder_path(
+    ui: &mut Ui,
+    what: FolderFor,
+    path: &mut String,
+    error: &Option<String>,
+    actions: &mut Vec<Action>,
+) {
+    let (heading, about) = match what {
+        FolderFor::Saves => (
+            "Your saves folder's path",
+            "Type or paste the path of the folder your saves are in: the game's \
+             Savegames/Story folder, or one save's own folder.",
+        ),
+        FolderFor::Game => (
+            "The game folder's path",
+            "Type or paste the path of the folder the game is installed in: Baldurs Gate 3, \
+             or the Data folder inside it.",
+        ),
+    };
+    title(ui, heading);
+    ui.label(egui::RichText::new(about).color(theme::TEXT_SOFT));
+    let field = ui.add(
+        egui::TextEdit::singleline(path)
+            .desired_width(f32::INFINITY)
+            .font(theme::mono(14.0))
+            .margin(Margin::symmetric(10.0, 8.0)),
+    );
+    let focused = Id::new(FOLDER_PATH_FOCUSED);
+    if !ui.data(|d| d.get_temp::<bool>(focused).unwrap_or(false)) {
+        field.request_focus();
+        ui.data_mut(|d| d.insert_temp(focused, true));
+    }
+    if let Some(error) = error {
+        ui.label(egui::RichText::new(error).color(theme::CORAL));
+    }
+    let enter = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+    let empty = path.trim().is_empty();
+    buttons(ui, |ui| {
+        ui.add_enabled_ui(!empty, |ui| {
+            if widgets::button(ui, "Use this folder", Kind::Primary).clicked() || (enter && !empty)
+            {
+                actions.push(Action::UseFolderPath(what, path.clone()));
+            }
+        });
+        if widgets::button(ui, "Cancel", Kind::Quiet).clicked() {
+            actions.push(Action::CloseDialog);
         }
     });
 }

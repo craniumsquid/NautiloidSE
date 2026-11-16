@@ -143,6 +143,22 @@ frame. File dialogs and "show in folder" go through a `Platform` trait, which th
 replace. The game's files are read on a background thread at start (`ui/game.rs`), and the
 session is given the catalog when it arrives.
 
+On Linux the folder picker (`rfd`) goes through the desktop portal, falling back to `zenity`.
+It is built with `async-std`, not `tokio`: with `tokio` the picker panics unless the app runs
+a tokio runtime, and until 1.1.2 choosing a folder closed the app that way. The call is also
+wrapped so that a picker that fails only means no folder was chosen, and any folder can be
+given as a typed path instead (`Action::AskFolderPath`), which is the only way where there is
+no portal and no `zenity`. Under Wayland a folder dropped on the window never arrives: winit
+doesn't pass file drops on there.
+
+On Linux the folder picker (`rfd`) goes through the desktop portal, falling back to `zenity`.
+It is built with `async-std`, not `tokio`: with `tokio` the picker panics unless the app runs
+a tokio runtime, and until 1.1.2 choosing a folder closed the app that way. The call is also
+wrapped so that a picker that fails only means no folder was chosen, and any folder can be
+given as a typed path instead (`Action::AskFolderPath`), which is the only way where there is
+no portal and no `zenity`. Under Wayland a folder dropped on the window never arrives: winit
+doesn't pass file drops on there.
+
 ## What the game accepts
 
 These are the rules for changing the entity data. Each one is in the "Tried in the game"

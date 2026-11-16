@@ -14,7 +14,10 @@ impl Platform for NativePlatform {
         if let Some(start) = start {
             dialog = dialog.set_directory(start);
         }
-        dialog.pick_folder()
+        // Whatever goes wrong inside the picker, the app carries on: there is another way
+        // to give a folder.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dialog.pick_folder()))
+            .unwrap_or(None)
     }
 
     fn reveal(&self, path: &Path) {
