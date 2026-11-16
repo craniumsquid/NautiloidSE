@@ -363,6 +363,13 @@ impl Catalog {
         let story = |key: &str| first(&templates, key, |t| t.story).unwrap_or(false);
         let max_stack = |key: &str| first(&templates, key, |t| t.max_stack).unwrap_or(1);
         let pickable = |key: &str| first(&templates, key, |t| t.pickable).unwrap_or(false);
+        // Whether it comes from the game's base template for containers.
+        let from_container_base = |key: &str| {
+            first(&templates, key, |t| {
+                t.name.starts_with("BASE_CONT").then_some(true)
+            })
+            .unwrap_or(false)
+        };
         // A container if the nearest `InventoryType` in its line says so. In the saves,
         // items have an inventory of their own when it does, give or take a few broken crates
         // and the Astral Prism: a Runepowder Barrel comes from `CONT_` barrels but sets it to
@@ -404,11 +411,14 @@ impl Catalog {
                 story: story(key),
                 spell: inherited(key, |t| &t.spell),
                 max_stack: max_stack(key),
-                // A weapon can inherit a container's settings without being one, and nothing
-                // that stacks is one: Wood Bark says it has an inventory, and the game gives
-                // it one more often than not, but there's nothing to open, and stacks split
-                // from it have none.
-                container: kind == Kind::Object && max_stack(key) <= 1 && container(key),
+                // A weapon can inherit a container's settings without being one. Something
+                // that stacks is one only if it comes from the base template for containers,
+                // as a Ribcage does, which bg3.wiki lists as a container. Wood Bark, an
+                // ingredient, says it has an inventory, and the game gives it one more often
+                // than not, but there's nothing to open, and stacks split from it have none.
+                container: kind == Kind::Object
+                    && container(key)
+                    && (max_stack(key) <= 1 || from_container_base(key)),
                 pickable: pickable(key),
             });
         }
@@ -896,7 +906,7 @@ mod tests {
     #[test]
     fn containers_follow_their_inventory_type() {
         let key = |n: u32| format!("cccc0000-0000-0000-0000-{n:012}");
-        let keys: Vec<String> = (1..=8).map(key).collect();
+        let keys: Vec<String> = (1..=10).map(key).collect();
         let item = |k: usize,
                     name: &'static str,
                     parent: Option<usize>,
@@ -937,6 +947,14 @@ mod tests {
                 "Wood_Bark",
                 None,
                 &[("InventoryType", "9"), ("maxStackAmount", "99")],
+            ))
+            // A ribcage stacks too, but comes from the base template for containers.
+            .child(item(8, "BASE_CONT", None, &[("InventoryType", "4")]))
+            .child(item(
+                9,
+                "Ribcage",
+                Some(8),
+                &[("InventoryType", "7"), ("maxStackAmount", "99")],
             ))])
         .unwrap();
         let objects: String = [
@@ -948,6 +966,8 @@ mod tests {
             "Pouch",
             "Potion",
             "Wood_Bark",
+            "BASE_CONT",
+            "Ribcage",
         ]
         .iter()
         .map(|name| format!("new entry \"{name}\"\ntype \"Object\"\n\n"))
@@ -972,6 +992,7 @@ mod tests {
         assert!(container("Pouch"));
         assert!(!container("Potion"));
         assert!(!container("Wood_Bark"), "it stacks");
+        assert!(container("Ribcage"), "it stacks, but comes from BASE_CONT");
     }
 
     #[test]

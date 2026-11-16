@@ -301,9 +301,13 @@ templates isn't 0; with none in the line, when it has a bag's `ContainerAutoAddO
   Artefact") is one exception: `InventoryType` 4, no inventory in any save. It stays refused,
   as a second Prism has no use and its quest might react to one. The Firewine Barrel is a
   container by this rule, and 31 of the 34 carried in the samples have an inventory.
-- An item that stacks is never a container: Wood Bark sets `InventoryType` 9 and the game
-  gives it an inventory more often than not, but there is nothing to open, and stacks split
-  from it have none.
+- An item that stacks is a container only if it comes from `BASE_CONT`, the base template
+  for containers. Only two items in the game stack and have an `InventoryType`: a Ribcage,
+  from `BASE_CONT`, which bg3.wiki lists as a container; and Wood Bark, an ingredient that
+  sets `InventoryType` 9 itself. The game gives Wood Bark an inventory more often than not,
+  but there is nothing to open, and stacks split from it have none.
+- bg3.wiki's Containers page agrees with this for every container whose template is in the
+  catalog. The ones it calls static can't be picked up and aren't offered.
 
 It reads only those files out of the packages, not the packages whole. The list offered for
 adding is one item per game name that has an English name and can be picked up, leaving out
