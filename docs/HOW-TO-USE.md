@@ -9,6 +9,8 @@ If you don't like the result, load the old save instead.
 
 The pictures here use made-up sample saves, so the names and numbers won't match yours.
 
+Nautiloid is unofficial. It isn't made by, affiliated with, or endorsed by Larian Studios.
+
 ## Contents
 
 1. [Start the app](#1-start-the-app)

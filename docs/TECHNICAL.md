@@ -365,12 +365,19 @@ whose commit message contains `[build]`, and attaches the builds to the run. mac
 for version tags, or by hand with its box ticked. `packaging/make-icons.sh` makes the icons
 from `assets/icon/source.webp`.
 
-Every download includes the user guide as `How to use Nautiloid.pdf`. CI's `guide` job makes
-it on every push with `packaging/make-guide.py`, which turns `docs/HOW-TO-USE.md` into one HTML
-page, with the pictures and the app's fonts inside it, and prints that with Chrome. To make it
-locally: `pip install markdown==3.7`, then `python3 packaging/make-guide.py <folder>`, with
-`--browser <path>` if Chrome or Chromium isn't on the path. The guide's text shouldn't point at
-where the app is hosted: it goes out with downloads from wherever the app is published.
+Every download includes two more files, both made by CI's `extras` job on every push:
+
+- `How to use Nautiloid.pdf`, the user guide. `packaging/make-guide.py` turns
+  `docs/HOW-TO-USE.md` into one HTML page, with the pictures and the app's fonts inside it,
+  and prints that with Chrome. To make it locally: `pip install markdown==3.7`, then
+  `python3 packaging/make-guide.py <folder>`, with `--browser <path>` if Chrome or Chromium
+  isn't on the path. The guide's text shouldn't say where the app is hosted: it goes out with
+  downloads from wherever the app is published.
+- `THIRD-PARTY-LICENSES.txt`, the licences of the libraries and fonts built into the
+  programs. `packaging/make-notices.sh` writes it with `cargo-about` (`about.toml` and
+  `packaging/third-party.hbs` say what it collects), adding the two font notices egui's
+  default fonts carry beyond their declared licences. A new dependency under a licence not in
+  `about.toml`'s list stops it, so the list is checked whenever dependencies change.
 
 ## Not done
 

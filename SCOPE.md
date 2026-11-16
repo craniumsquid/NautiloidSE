@@ -1,10 +1,9 @@
 # Scope
 
-Nautiloid is a save editor for Baldur's Gate 3, written from scratch in Rust with egui. It takes
-its interface design from other save editors: a save browser, a sidebar of
-tabs, a Changes panel where every change has its own Revert, undo and redo, and an export that
-always writes a new save. No code is shared with other editors, so nothing of their licences or
-authorship carries over. Nautiloid is GPL-3.0-only.
+Nautiloid is a save editor for Baldur's Gate 3, written from scratch in Rust with egui: a save
+browser, a sidebar of tabs, a Changes panel where every change has its own Revert, undo and
+redo, and an export that always writes a new save. No code comes from other save editors.
+Nautiloid is GPL-3.0-only.
 
 ## Target
 

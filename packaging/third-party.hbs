@@ -1,0 +1,17 @@
+Third-party licences
+====================
+
+Nautiloid Save Editor is built with the open-source libraries below. Their licences follow,
+each with the libraries it covers. Nautiloid itself is licensed under the GPL-3.0 (LICENSE).
+{{#each licenses}}
+
+--------------------------------------------------------------------------------
+{{{name}}}
+
+Used by:
+{{#each used_by}}
+  - {{crate.name}} {{crate.version}}
+{{/each}}
+
+{{{text}}}
+{{/each}}
