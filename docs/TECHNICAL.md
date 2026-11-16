@@ -360,10 +360,9 @@ the game.
 
 The app needs Rust 1.88 or later: `cargo build --release`. CI (`.github/workflows/ci.yml`)
 checks formatting, lints with warnings as errors, and runs the tests on every push. It builds
-the app for Windows and Linux for `main`, for version tags, when run by hand, and for any push
-whose commit message contains `[build]`, and attaches the builds to the run. macOS is built
-for version tags, or by hand with its box ticked. `packaging/make-icons.sh` makes the icons
-from `assets/icon/source.webp`.
+the app for Windows, Linux and macOS for `main`, for version tags, when run by hand, and for
+any push whose commit message contains `[build]`, and attaches the builds to the run.
+`packaging/make-icons.sh` makes the icons from `assets/icon/source.webp`.
 
 Every download includes two more files, both made by CI's `extras` job on every push:
 

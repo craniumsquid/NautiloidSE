@@ -40,6 +40,11 @@ Nautiloid is unofficial. It isn't made by, affiliated with, or endorsed by Laria
 On Windows, a blue box saying "Windows protected your PC" may appear the first time, because
 the app isn't signed. Click **More info**, then **Run anyway**.
 
+On a Mac, the first time, macOS says it can't check the app for malware, because the app isn't
+registered with Apple. Click **Done**, open **System Settings**, then **Privacy & Security**,
+scroll down and click **Open Anyway** beside the app's name, and confirm. After that it opens
+normally.
+
 On Windows and Linux the folder also holds **nautiloid-cli**, a tool for looking inside saves
 from a terminal. You don't need it to use the editor.
 

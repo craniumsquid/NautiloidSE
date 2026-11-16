@@ -62,16 +62,17 @@ Saves from before Patch 8 are listed but can't be edited.
 
 ## Getting it
 
-The app is built for Windows and Linux whenever `main` changes. On the repository's **Actions**
-page, open the latest **CI** run and download `nautiloid-save-editor-windows-x64` or
-`nautiloid-save-editor-linux-x64` from its artifacts.
+The app is built for Windows, Linux and macOS whenever `main` changes. On the repository's
+**Actions** page, open the latest **CI** run and download `nautiloid-save-editor-windows-x64`,
+`nautiloid-save-editor-linux-x64` or `nautiloid-save-editor-macos-arm64` from its artifacts.
 
 - **Windows:** unzip and run `nautiloid-save-editor.exe`. The app isn't signed, so Windows may
   show "Windows protected your PC" the first time; choose **More info**, then **Run anyway**.
 - **Linux and Steam Deck:** unpack the archive and run `nautiloid-save-editor`. It needs a
   desktop with OpenGL and `libxkbcommon-x11`, which desktop systems have.
-- **macOS:** built only for version tags, or when the CI workflow is run by hand with the macOS
-  box ticked. That build has not been run on a Mac yet.
+- **macOS (Apple silicon):** unzip it and open `Nautiloid Save Editor.app`. The app isn't
+  notarized, so the first time macOS refuses to open it: choose **Done**, then **Open Anyway**
+  in System Settings → Privacy & Security. That build has not been run on a Mac yet.
 
 Each download includes the guide as a PDF, `How to use Nautiloid.pdf`, and
 `THIRD-PARTY-LICENSES.txt`, the licences of the libraries and fonts built into the app.

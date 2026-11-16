@@ -125,8 +125,7 @@ beside the original.
 - The interface is tested without a window: tests click through the app, check what it does
   and draw each screen. The app has also been run on a virtual Linux display against the
   sample saves. It has not yet been run on Windows or macOS, or by anyone but its tests.
-- Builds for Windows and Linux are made by CI for `main`; macOS for version tags and on
-  request.
+- Builds for Windows, Linux and macOS are made by CI for `main` and for version tags.
 
 Since then: companions at camp, the Inventory tab and the Approval tab. What has and has
 not been tried in the game:
