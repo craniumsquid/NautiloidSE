@@ -201,9 +201,11 @@ points you set are what count.
 **The camp supplies total didn't change.** The game counts it up from your food when it
 loads. Change how much food you have on the Inventory tab instead.
 
-**It's an Honour Mode save.** You can export it, but the game keeps one save per Honour Mode
-playthrough, and a second one beside it hasn't been tried. Keep a copy of your save folder
-somewhere safe first.
+**The game won't load an Honour Mode save** and says you can't reload a previous save while
+playing in Single Save mode. Honour Mode allows one save per playthrough, so the game won't
+load another one while a game is running. Go back to the game's main menu and load it from
+there. Keep a copy of your original save folder somewhere safe too: it hasn't been checked
+which of the two saves the game writes over when you next save.
 
 **Something else went wrong.** Load your original save: it was never changed. Then report
 the problem where you downloaded the app, saying what you changed.

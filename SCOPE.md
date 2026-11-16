@@ -100,9 +100,10 @@ character or the camp chest, up to 20 of each per export.
 
 - **Difficulty.** Converting an Honour Mode save to Custom or Balanced, and rescuing a failed
   Honour run. One sample is an Honour Mode save, at the start of a game. Until this is built,
-  an Honour Mode save opens and exports like any other, but the game keeps a single save for
-  such a playthrough and a second one beside it hasn't been tried, which the export dialog
-  says.
+  an Honour Mode save opens and exports like any other. The export, a second save of the same
+  playthrough, loads from the game's main menu with its changes; the game won't load it while
+  a game is running, as Honour Mode allows one save per playthrough. Which of the two the game
+  saves over next hasn't been checked. The export dialog says to load from the main menu.
 
 ## Out of scope
 

@@ -167,8 +167,9 @@ fn export(
     if session.is_some_and(|s| s.summary().honour_mode) {
         ui.label(
             egui::RichText::new(
-                "⚠ This is an Honour Mode save. The game keeps a single save for an Honour \
-                 Mode playthrough, and a second one beside it hasn't been tried in the game.",
+                "⚠ This is an Honour Mode save. Honour Mode allows one save per playthrough, \
+                 so load the new save from the game's main menu: the game won't load it while \
+                 a game is running.",
             )
             .color(theme::ACCENT),
         );

@@ -349,7 +349,7 @@ fn adds_items_from_the_games_files() {
 }
 
 #[test]
-fn exporting_an_honour_mode_save_says_it_is_untried() {
+fn exporting_an_honour_mode_save_says_how_to_load_it() {
     let dir = temp_dir("honour");
     sample_saves(&dir);
     let mut ui = Harness::new(Some(dir.clone()), WINDOW);

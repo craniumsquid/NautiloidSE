@@ -46,7 +46,8 @@ between a character and the camp chest.
 
 An exported quicksave or autosave is written as a manual save, so the game's load menu lists
 it by its name (it lists its own autosaves as "Autosave 4" whatever they're called). An
-Honour Mode save stays one.
+Honour Mode save stays one; load it from the game's main menu, as the game won't load a
+second save of an Honour Mode playthrough while a game is running.
 
 It also lists the mods a save asks for, marked by whether your game has them active. That
 list is read only: the game's own mod manager is the place to change it.
