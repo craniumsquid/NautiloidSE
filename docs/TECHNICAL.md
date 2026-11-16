@@ -312,6 +312,10 @@ NAUTILOID_SAVES="path/to/Savegames/Story" NAUTILOID_GAME_FILES="path/to/Baldurs 
   CI.
 - **The interface.** `tests/ui.rs` runs the real app headless: it clicks, types and reads
   back what is drawn, and saves a picture of each screen to `target/ui-snapshots/`.
+- **The user guide's pictures.** `tests/guide.rs` goes through the steps of
+  [HOW-TO-USE.md](HOW-TO-USE.md) on the sample saves. To refresh the pictures after the
+  interface changes: `NAUTILOID_GUIDE_IMAGES=1 cargo test --test guide`, then
+  `python3 packaging/shrink-images.py docs/images/guide/*.png`.
 - **The game.** None of this proves a save loads. Every kind of change was tried in the game
   first, from test saves the command-line tool writes, and the result recorded in
   FORMAT.md. A fork that changes how saves are written needs to do the same.

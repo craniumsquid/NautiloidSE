@@ -53,6 +53,7 @@ list is read only: the game's own mod manager is the place to change it.
 
 Saves from before Patch 8 are listed but can't be edited.
 
+- [docs/HOW-TO-USE.md](docs/HOW-TO-USE.md): a step-by-step guide, with pictures.
 - [SCOPE.md](SCOPE.md): what the editor will and won't do, the build order and where it stands.
 - [docs/FORMAT.md](docs/FORMAT.md): what is known about the save format.
 - [docs/TECHNICAL.md](docs/TECHNICAL.md): how the editor works, for anyone forking or
@@ -85,6 +86,8 @@ cargo run --release
    each can be reverted on its own. Undo and redo work as usual.
 3. Choose **Export as a new save**, and give the save a name. It is written beside the
    original, and the game lists it under that name in **Load Game**.
+
+For every step with pictures, see [How to use Nautiloid](docs/HOW-TO-USE.md).
 
 ![The save browser](docs/images/browser.png)
 
