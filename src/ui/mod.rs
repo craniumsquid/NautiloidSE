@@ -14,6 +14,7 @@ pub mod info;
 pub mod inventory;
 pub mod mods;
 pub mod party;
+pub mod story;
 pub mod theme;
 pub mod thumbs;
 pub mod toast;
@@ -65,15 +66,17 @@ pub enum Tab {
     Party,
     Inventory,
     Approval,
+    Story,
     Mods,
     Info,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 5] = [
+    pub const ALL: [Tab; 6] = [
         Tab::Party,
         Tab::Inventory,
         Tab::Approval,
+        Tab::Story,
         Tab::Mods,
         Tab::Info,
     ];
@@ -92,6 +95,7 @@ impl Tab {
             Tab::Party => "Party",
             Tab::Inventory => "Inventory",
             Tab::Approval => "Approval",
+            Tab::Story => "Story",
             Tab::Mods => "Mods",
             Tab::Info => "Save info",
         }
@@ -524,6 +528,7 @@ impl EditorApp {
                                             inventory::show(ui, session, &self.game, actions)
                                         }
                                         Tab::Approval => approval::show(ui, session, actions),
+                                        Tab::Story => story::show(ui, session),
                                         Tab::Mods => mods::show(ui, session),
                                         Tab::Info => info::show(ui, session, now),
                                     });

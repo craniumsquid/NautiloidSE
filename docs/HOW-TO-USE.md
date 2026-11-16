@@ -19,9 +19,10 @@ Nautiloid is unofficial. It isn't made by, affiliated with, or endorsed by Laria
 4. [Check and undo your changes](#4-check-and-undo-your-changes)
 5. [Change and add items](#5-change-and-add-items)
 6. [Change approval](#6-change-approval)
-7. [See your mods](#7-see-your-mods)
-8. [Save your changes and play](#8-save-your-changes-and-play)
-9. [If something looks wrong](#9-if-something-looks-wrong)
+7. [See what the story is tracking](#7-see-what-the-story-is-tracking)
+8. [See your mods](#8-see-your-mods)
+9. [Save your changes and play](#9-save-your-changes-and-play)
+10. [If something looks wrong](#10-if-something-looks-wrong)
 
 ## Before you start
 
@@ -165,7 +166,24 @@ you) to 100 (they adore you). Change it with **−** and **+**.
 
 ![The Approval tab](images/guide/07-approval.png)
 
-## 7. See your mods
+## 7. See what the story is tracking
+
+Click **Story** to see things the game keeps count of but never shows you. This tab only
+shows them: nothing on it can be changed.
+
+- **Points the story is counting.** Some outcomes depend on a hidden tally. The best known is
+  whether Shadowheart will spare the Nightsong: each thing that earns a point is listed, with
+  a green dot once it has happened, and the total beside it.
+- **Counters.** Other numbers the story keeps, such as how many times you have rested at camp.
+- **Flags.** Everything the story has marked as having happened in this playthrough. Type in
+  the box to filter them, for example a companion's name.
+
+Everything here is under the game's own internal names, so some of it reads oddly, and names
+can give away parts of the story you haven't reached.
+
+![The Story tab, with the tally of Nightsong points](images/guide/12-story.png)
+
+## 8. See your mods
 
 Click **Mods** to see the mods this save was made with. **Active** means your game has the
 mod turned on; **Not active** means it doesn't, and the game will warn you when you load the
@@ -173,7 +191,7 @@ save. This list can't be changed here: use the game's own mod manager.
 
 ![The Mods tab, with two mods not active in the game](images/guide/08-mods.png)
 
-## 8. Save your changes and play
+## 9. Save your changes and play
 
 1. Click **Export as a new save…** at the bottom right (or press **Ctrl+E**).
 2. Type a name for the new save, or keep the one suggested. This is the name the game will
@@ -193,7 +211,7 @@ Now, in the game:
 2. Open your playthrough. Your new save is listed under the name you gave it.
 3. Load it. If you added level-ups, the game offers them.
 
-## 9. If something looks wrong
+## 10. If something looks wrong
 
 **Items have odd names, and "Add items" is greyed out.** The app couldn't find your game,
 so it shows the game's internal names. Click **Choose game folder…** and pick the folder the

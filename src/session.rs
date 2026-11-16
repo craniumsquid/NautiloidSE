@@ -134,6 +134,8 @@ pub struct Session {
     sources: Vec<Source>,
     /// Items to add, in the order they were asked for.
     additions: Vec<Addition>,
+    /// The story state, read the first time it is asked for.
+    story: std::cell::OnceCell<Result<crate::story::State, String>>,
 }
 
 /// Finds each character's entry in the save's own summary, which is the only place the
@@ -293,6 +295,7 @@ impl Session {
             catalog: None,
             sources: Vec::new(),
             additions: Vec::new(),
+            story: std::cell::OnceCell::new(),
         })
     }
 
@@ -595,6 +598,17 @@ impl Session {
 
     pub fn is_changed(&self, field: Field) -> bool {
         self.value(field) != self.original_value(field)
+    }
+
+    /// The story's counters, tallies and flags as the save has them, or why they can't be
+    /// read. Read once, when first asked for; no edit changes them.
+    pub fn story(&self) -> Result<&crate::story::State, &str> {
+        self.story
+            .get_or_init(|| {
+                crate::story::State::read(&self.save, &self.globals).map_err(|e| format!("{e:#}"))
+            })
+            .as_ref()
+            .map_err(String::as_str)
     }
 
     /// A warning for Inspiration raised past what the game allows by itself.
@@ -1125,7 +1139,7 @@ pub mod build {
         spec.mods = vec!["Faerun Colors".to_owned(), "Better UI".to_owned()];
         spec.files = vec![
             (save::GLOBALS.to_owned(), party::build::globals_lsf()),
-            (save::STORY.to_owned(), vec![7u8; 4096]),
+            (save::STORY.to_owned(), crate::story::build::sample()),
         ];
         spec.screenshot = Some(b"not really a picture".to_vec());
         save_folder(dir, &spec)

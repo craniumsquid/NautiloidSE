@@ -110,8 +110,12 @@ character or the camp chest, up to 20 of each per export.
 
 ## Out of scope
 
-- Global and story flags, and anything else in the story-script state (`StorySave.bin`). The
-  file is carried through unchanged.
+- Changing global and story flags, or anything else in the story-script state
+  (`StorySave.bin`). The file is carried through unchanged. The Story tab shows the story's
+  counters, its tallies of points (such as those toward Shadowheart sparing the Nightsong)
+  and the flags the save keeps, read only: the story's rules run when the game changes one
+  of these, not when a save is loaded, so a change made in a save would leave undone
+  whatever the game does about it.
 - Appearance. The game's Magic Mirror covers it.
 - Class, subclass and multiclass changes. Withers' respec covers it.
 - Forcing story outcomes or reviving story characters.

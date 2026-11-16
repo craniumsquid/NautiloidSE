@@ -389,6 +389,26 @@ const PLUS_LEVEL_UPS: usize = 2;
 const PLUS_STRENGTH: usize = 3;
 
 #[test]
+fn the_story_tab_shows_counters_tallies_and_flags() {
+    let (dir, mut ui) = open_sample("story");
+    ui.click("Story");
+    assert!(ui.sees("nothing here can be changed"));
+    // The tally of Nightsong points, with what each point came from.
+    assert!(ui.sees("Shadowheart · Nightsong Points"));
+    assert!(ui.sees("Gave Night Orchid"));
+    assert!(ui.sees("Agreed To Trials"));
+    assert!(ui.sees("NOT ENOUGH YET"));
+    // The counters and the flags, under the game's own names.
+    assert!(ui.sees("Camp_Rest_Count"));
+    assert!(ui.sees("GLO_Origin_PartOfTheTeam_Shadowheart"));
+    assert!(ui.sees("FLAGS (5)"));
+    ui.snapshot("12-story");
+    // Nothing on it counts as a change.
+    assert!(!ui.app.session().unwrap().is_dirty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn inspiration_past_the_games_limit_shows_a_warning() {
     use nautiloid_save_editor::session::Field;
     let (dir, mut ui) = open_sample("inspiration");

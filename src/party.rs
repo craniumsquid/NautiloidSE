@@ -1028,6 +1028,7 @@ pub mod build {
             Node::new("Characters").child(Node::new("CharacterFactory").child(characters)),
             Node::new("Items").child(Node::new("ItemFactory").child(items).child(item_list)),
             entities,
+            crate::story::build::flag_map(),
         ])
         .expect("the sample tree is well formed")
     }

@@ -21,7 +21,8 @@ The party, and the companions waiting at camp:
 - **Ability points**: the points put into each ability at character creation. The game adds
   the character's other bonuses on top.
 - **Gold**, for a character who already carries some.
-- **Inspiration**, once the party has earned a point.
+- **Inspiration**, once the party has earned a point. The game allows 4; more needs a mod
+  that lifts that, and the app says so.
 
 - **Inventory**: how many each stack holds, for every character and the camp chest. Food
   shows the camp supplies it is worth, and the game's supplies total follows it. Items have
@@ -35,6 +36,9 @@ The party, and the companions waiting at camp:
   as many as you ask for; a single item has a + beside it to add more. New items go at the
   end of the inventory.
 - **Approval**: what each companion thinks of your character.
+- **Story**, to look at only: the counters the story keeps, its hidden tallies of points
+  (such as those toward Shadowheart sparing the Nightsong, with what earned each), and the
+  flags it has set, under the game's own names.
 
 Each of these has been changed in a save that then loaded in the game (build
 `4.1.1.7631656`) with the new value. For a companion at camp that is so for ability points;

@@ -469,7 +469,10 @@ pub fn write_sample(dir: &Path, sample: &Sample) -> PathBuf {
     if sample.with_party {
         spec.files = vec![
             (save::GLOBALS.to_owned(), party::build::globals_lsf()),
-            (save::STORY.to_owned(), vec![7u8; 4096]),
+            (
+                save::STORY.to_owned(),
+                nautiloid_save_editor::story::build::sample(),
+            ),
         ];
     }
     save_folder(dir, &spec).unwrap()

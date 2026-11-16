@@ -10,6 +10,7 @@
 //! * [`session`]: a save open for editing: its changes, undo and redo, and export.
 //! * [`ui`]: the interface.
 //! * [`diff`]: what differs between two documents.
+//! * [`story`]: the story's databases and flags, read only.
 
 pub mod catalog;
 pub mod diff;
@@ -22,5 +23,6 @@ pub mod party;
 pub mod save;
 pub mod saves;
 pub mod session;
+pub mod story;
 pub mod ui;
 pub mod value;

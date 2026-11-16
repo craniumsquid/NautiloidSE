@@ -43,7 +43,7 @@ A current save holds:
 | `SaveInfo.json` | The party's classes, level, experience, origin and race; game version; current level; difficulty unless the rules are custom | under 3 KB |
 | `Globals.lsf` | Characters, items and global state, including the party's entity data | 2 to 5 MB |
 | `LevelCache/<level>.lsf` | One per visited level, same structure | up to 23 MB |
-| `StorySave.bin` | Story-script state. Not read; copied unchanged | 33 to 76 MB |
+| `StorySave.bin` | Story-script state. Read for the Story tab (see TECHNICAL.md); copied unchanged | 33 to 76 MB |
 | `<SaveName>.WebP` | The same screenshot that sits next to the `.lsv` | 9 to 190 KB |
 
 ## Documents (`.lsf`)
@@ -414,6 +414,7 @@ All on build `4.1.1.7631656`, with copies of one manual save.
 | A Bag of Rotten Food made the same way, from the only template it has, which can't be picked up | A blank slot in the inventory. Items that can't be picked up are no longer offered |
 | A Firewine Barrel made from a Rune Slate, with no inventory of its own; the same made from a carried Water Barrel; a plain copy of that Water Barrel | Each loads, breaks into alcohol and explodes. Weight 0, as for the game's own |
 | A Firewine Barrel and a Runepowder Barrel made without `InventoryItemDataPopulatedComponent` | The same as with it: right value, weight 0, explode |
+| Inspiration raised, with the number kept beside it: 1 → 4; 4 → 6 and 6 → 10 in a game with a mod that lifts the limit of 4 | Loads, with the new amount |
 | Made in the app from the Honour Mode save, with Gale's ability scores and items changed | Loads from the main menu with the changes in place. With a game running, the load menu refuses it: "You cannot reload a previous save while playing in Single Save mode" |
 
 Every failure looks the same: the save loads to 100%, drops to the title screen, and shows

@@ -27,8 +27,9 @@ These shaped the code. A fork can change them, but should know what they protect
 - **Every change is listed and can be reverted on its own**, and undo and redo work across
   all of them.
 - **No code from other save editors.** The NewAge checksum's function and seed come from
-  the notes in the [SaveForge](https://github.com/danaketh/SaveForge) project; the code is
-  this project's own.
+  the notes in the [SaveForge](https://github.com/danaketh/SaveForge) project, and the
+  layout of the story file from the story reader in
+  [LSLib](https://github.com/Norbyte/lslib); the code is this project's own.
 - Licence: GPL-3.0-only.
 
 ## Layout
@@ -45,6 +46,7 @@ These shaped the code. A fork can change them, but should know what they protect
 | `src/items.rs` | Adding items: copying an item from anywhere in the save into an inventory, making the copy into another item, stacks, the pointer check |
 | `src/catalog.rs` | The game's items, read from the player's install: names, kinds, stack sizes, scroll spells |
 | `src/mods.rs` | The save's mod list, compared with the mods the game has active |
+| `src/story.rs` | The story state, read only: the story file's databases, and the flags in `Globals.lsf` |
 | `src/session.rs` | An open save being edited: the fields, their ranges, undo and redo, the items to add, and the export with its check |
 | `src/diff.rs` | Comparing two saves, for research |
 | `src/ui/` | The interface, in eframe and egui 0.29 |
@@ -64,7 +66,7 @@ The `.lsv` is a Larian package: a header with an MD5 of every file's uncompresse
 files (each Zstandard-compressed in Patch 8), then an LZ4-compressed file list. It holds
 `meta.lsf` (game version, mods, difficulty, save type), `SaveInfo.json`, `Globals.lsf` (the
 characters, items and global state), a document per visited level, and `StorySave.bin` (the
-story script's state, which the editor never touches). `lspk.rs` reads all of this and, on
+story script's state, which the editor reads for the Story tab and never changes). `lspk.rs` reads all of this and, on
 writing, keeps every file it wasn't asked to replace byte for byte the same.
 
 ### Documents
@@ -324,6 +326,41 @@ slot in an inventory. Where several templates share a game name, one that can be
 is preferred. Items added by mods aren't in it: their
 templates and text are in the mods' own packages, which the editor doesn't read yet.
 
+## The story state (read only)
+
+The Story tab shows what `story.rs` reads from two places. Nothing writes either.
+
+- **`StorySave.bin`** is the save of the game's story-script engine, Osiris: the compiled
+  story (functions, rule nodes, adapters, goals) and its databases, named tables of facts.
+  Patch 8 writes version 1.15, and 1.14 before its second hotfix, laid out the same:
+  strings have every byte flipped with `0xAD`, type identifiers
+  are 16 bits, and each value starts with a place byte and a byte of flags. `Story::parse`
+  steps over everything up to the databases, notes each database's name (its node's) and
+  where its facts start, and checks that it comes out at the file's last byte; facts are
+  read when asked for. A late-game sample has 15,761 databases and 59,545 facts and reads
+  in about 0.1 s. Other versions are refused; saves that old can't be edited anyway.
+- **Flags** are in `Globals.lsf`, at `OsirisVariableHelper/VariableManager/FlagMap`: an
+  `Object` per flag the game has ever touched, keyed by the flag's identifier, with a
+  `Flags` boolean. A flag that was never set isn't there. The save doesn't name them; the
+  names come from the story file, where every text that ends in an identifier
+  (`ORI_..._GaveNightOrchid_<identifier>`) names it. About three in four of a save's flags
+  get a name this way. The rest would need the game's own `Flags` files.
+
+What the tab shows:
+
+- **Counters**: the facts of `DB_GlobalCounter`, a name and a number.
+- **Tallies**: each one-column database called `DB_<name>_ConditionFlags` lists the flags
+  that earn a point toward something. Its counter is the one whose name starts with
+  `<name>`, and the flag ending `HasEnoughPoints` beside the others says whether the story
+  counts the total as enough. Patch 8 has three, all Shadowheart's: Nightsong points,
+  parent points and wolf dream points.
+
+Why read only: the story's rules run when the game changes a fact, not when a save is
+loaded. Raising a counter in a save would not set the flags the rules set when it passes a
+threshold, so each edit would need everything it implies worked out from the story's rules
+and tried in the game. `nautiloid-cli story` prints all of this, and any database's facts
+with `--db`.
+
 ## Testing
 
 ```bash
@@ -412,6 +449,8 @@ Every download includes two more files, both made by CI's `extras` job on every 
 
 ## Not done
 
+- Changing story state: counters, flags or anything else in the story file.
+- Names for the flags the story file doesn't name.
 - Names for items that mods add.
 - Converting an Honour Mode save to another difficulty (a stretch goal in SCOPE.md).
 - The macOS build hasn't been run on a Mac.

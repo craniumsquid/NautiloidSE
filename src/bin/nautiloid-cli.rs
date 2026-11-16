@@ -44,6 +44,10 @@ A <save> is a .lsv file or the save folder that holds one.
       (the party's, someone else's, nowhere) and whether it is equipped, stacked or a story
       item. --tables shows which component tables each kind of item has; --kind lists the
       items of one kind (Weapon, Armour, Object).
+  story <save> [--db NAME] [--find TEXT] [--flags] [--limit N]
+      The story state, read only: how many databases and facts the story file holds; with
+      --db, a database's facts; with --find, the databases whose names hold TEXT; with
+      --flags, the flags the save keeps and whether each is set.
   owners <save>
       Research: who each of the party's items belongs to by its ownership rows, and how long
       each character's lists of what they own are.
@@ -214,6 +218,10 @@ fn run(raw: &[String]) -> Result<()> {
         ),
         "items" => items(&Args::parse(rest, &[], &["game"])?, out),
         "owners" => owners(&Args::parse(rest, &[], &[])?, out),
+        "story" => story(
+            &Args::parse(rest, &["flags"], &["db", "find", "limit"])?,
+            out,
+        ),
         "pointers" => pointers(&Args::parse(rest, &[], &[])?, out),
         "pointer-check" => {
             for path in &rest.to_vec() {
@@ -1056,6 +1064,99 @@ fn pointers(args: &Args, out: &mut impl Write) -> Result<()> {
 
 /// Research: who each item in the party's inventories belongs to, by its ownership rows,
 /// compared with who holds it.
+fn story(args: &Args, out: &mut impl Write) -> Result<()> {
+    use nautiloid_save_editor::story::{self, Story, Value};
+    args.expect(
+        1,
+        "story <save> [--db NAME] [--find TEXT] [--flags] [--limit N]",
+    )?;
+    let save = Save::open(Path::new(&args.positional[0]))?;
+    let limit = args.number("limit")?.unwrap_or(40);
+    let started = std::time::Instant::now();
+    let story = Story::parse(save.package.read_file(save::STORY)?)?;
+    let facts: usize = story.databases.iter().map(|d| d.facts).sum();
+    writeln!(
+        out,
+        "{} databases, {} of them named, {facts} facts, read in {:.2} s",
+        story.databases.len(),
+        story
+            .databases
+            .iter()
+            .filter(|d| !d.name.is_empty())
+            .count(),
+        started.elapsed().as_secs_f64()
+    )?;
+    let show = |value: &Value| match value {
+        Value::None => "-".to_owned(),
+        Value::Integer(v) => v.to_string(),
+        Value::Real(v) => v.to_string(),
+        Value::Text(v) => v.clone(),
+    };
+    if let Some(text) = args.get("find") {
+        let text = text.to_lowercase();
+        let found = story
+            .databases
+            .iter()
+            .filter(|d| d.name.to_lowercase().contains(&text));
+        for database in found.take(limit) {
+            writeln!(
+                out,
+                "{}/{}  {} facts",
+                database.name, database.columns, database.facts
+            )?;
+        }
+    }
+    if let Some(name) = args.get("db") {
+        for database in story.databases.iter().filter(|d| d.name == *name) {
+            writeln!(
+                out,
+                "{}/{}: {} facts",
+                database.name, database.columns, database.facts
+            )?;
+            for fact in story.facts(name, database.columns)?.iter().take(limit) {
+                let columns: Vec<String> = fact.iter().map(show).collect();
+                writeln!(out, "  {}", columns.join(" | "))?;
+            }
+        }
+    }
+    let state = story::State::read(&save, &save.lsf(save::GLOBALS)?)?;
+    if args.get("find").is_none() && args.get("db").is_none() {
+        for (name, value) in &state.counters {
+            writeln!(out, "counter  {name} = {value}")?;
+        }
+        for tally in &state.tallies {
+            let counter = tally
+                .counter
+                .as_ref()
+                .map_or("no counter".to_owned(), |(n, v)| format!("{n} = {v}"));
+            writeln!(
+                out,
+                "tally    {}: {counter}; enough: {:?}",
+                tally.name, tally.enough
+            )?;
+            for event in &tally.events {
+                let mark = if event.done { "x" } else { " " };
+                writeln!(out, "           [{mark}] {}", event.name)?;
+            }
+        }
+    }
+    let set = state.flags.iter().filter(|f| f.set).count();
+    let named = state.flags.iter().filter(|f| f.name.is_some()).count();
+    writeln!(
+        out,
+        "{} flags kept, {set} of them set, {named} named by the story",
+        state.flags.len()
+    )?;
+    if args.get("flags").is_some() {
+        for flag in state.flags.iter().take(limit) {
+            let mark = if flag.set { "set" } else { "   " };
+            let name = flag.name.clone().unwrap_or_else(|| flag.id.to_string());
+            writeln!(out, "  {mark}  {name}")?;
+        }
+    }
+    Ok(())
+}
+
 fn owners(args: &Args, out: &mut impl Write) -> Result<()> {
     use std::collections::BTreeMap;
     args.expect(1, "owners <save>")?;

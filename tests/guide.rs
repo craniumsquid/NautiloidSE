@@ -218,9 +218,12 @@ fn guide_pictures() {
     assert!(ui.sees("ADDING (2)"));
     picture(&mut ui, "06-adding");
 
-    // Approval and mods.
+    // Approval, the story and mods.
     ui.click("Approval");
     picture(&mut ui, "07-approval");
+    ui.click("Story");
+    assert!(ui.sees("Shadowheart · Nightsong Points"));
+    picture(&mut ui, "12-story");
     ui.click("Mods");
     assert_eq!(ui.find_all("NOT ACTIVE").len(), 2);
     picture(&mut ui, "08-mods");

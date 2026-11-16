@@ -474,3 +474,37 @@ fn an_item_copied_into_an_inventory_reads_back_once_more() {
         assert_eq!(others(&after), others(&before), "{}", path.display());
     }
 }
+
+#[test]
+fn the_story_state_reads_in_every_editable_save() {
+    use nautiloid_save_editor::story::State;
+    for path in saves() {
+        let save = Save::open(&path).unwrap();
+        if let Support::ReadOnly(_) = save.support() {
+            continue;
+        }
+        let globals = save.lsf(save::GLOBALS).unwrap();
+        // Reading checks that the story file is understood to its last byte.
+        let state =
+            State::read(&save, &globals).unwrap_or_else(|e| panic!("{}: {e:#}", path.display()));
+        assert!(
+            !state.counters.is_empty(),
+            "{}: the story keeps counters from the start",
+            path.display()
+        );
+        // Shadowheart's tallies are in every Patch 8 game, with their counters.
+        let nightsong = state
+            .tallies
+            .iter()
+            .find(|t| t.name == "ORI_Shadowheart_NightsongPoint")
+            .unwrap_or_else(|| panic!("{}: no Nightsong tally", path.display()));
+        assert_eq!(nightsong.events.len(), 6, "{}", path.display());
+        let (counter, points) = nightsong.counter.clone().expect("its counter");
+        assert_eq!(counter, "ORI_Shadowheart_NightsongPoints");
+        assert!((0..=6).contains(&points), "{}: {points}", path.display());
+        assert!(nightsong.enough.is_some(), "{}", path.display());
+        // Most of the flags a save keeps are named by its story.
+        let named = state.flags.iter().filter(|f| f.name.is_some()).count();
+        assert!(named * 2 > state.flags.len(), "{}", path.display());
+    }
+}
