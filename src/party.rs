@@ -800,7 +800,13 @@ pub fn set_allocated(
         tables::CREATION_ABILITIES,
         ability + 1,
         points,
-    )
+    )?;
+    // The score as the game will work it out on load, moved as the points have, so the
+    // save reads the same before the game next writes it. The game ignores what is here.
+    let at = tables::STATS_ABILITIES + ability * 4;
+    let score = entities.get_u32(tables::STATS, index, at)?;
+    let moved = (score + points).saturating_sub(current[ability + 1]);
+    entities.set_u32(tables::STATS, index, at, moved)
 }
 
 /// Sets what a companion thinks of the character `of`, as [`Approval::of`] gives it.
@@ -1694,10 +1700,11 @@ mod tests {
             (Some(7100), 6, 5)
         );
         assert_eq!(hero.allocated, Some([7, 6, 7, 0, 2, 7]));
-        assert_eq!(
-            hero.abilities, before.characters[0].abilities,
-            "totals are the game's"
-        );
+        // Strength's score moves with its points, as the game will work it out; the others
+        // are as they were.
+        let mut expected = before.characters[0].abilities;
+        expected[0] += 7;
+        assert_eq!(hero.abilities, expected);
         // Loose gold is still listed first, however much the bag now holds.
         assert_eq!(
             (hero.gold[0].item, hero.gold[0].amount),

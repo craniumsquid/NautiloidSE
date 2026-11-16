@@ -211,6 +211,7 @@ fn adds_items_from_the_games_files() {
         display,
         kind,
         category,
+        max_stack: 1,
     };
     let game = dir.join("Baldurs Gate 3");
     game_folder_with(

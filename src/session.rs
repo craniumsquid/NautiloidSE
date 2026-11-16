@@ -140,8 +140,10 @@ pub struct Session {
 /// classes are written out and which lists the party in the game's order.
 ///
 /// A companion is listed under their own name. Anyone else, a custom character above all, is
-/// told apart by level and experience, which the summary and the entity data agree on. The
-/// summary lists only the party, so a companion at camp has no entry.
+/// told apart by level and experience, which the summary and the entity data agree on. A save
+/// this editor exported has the summary as it was before the edits (the game writes a new one
+/// when it next saves), so after that a character is matched by level alone, which no edit
+/// changes. The summary lists only the party, so a companion at camp has no entry.
 fn summary_entries(members: &[PartyMember], characters: &[Character]) -> Vec<Option<usize>> {
     // The summary writes Lae'zel as "Laezel".
     let key = |name: &str| -> String {
@@ -172,6 +174,11 @@ fn summary_entries(members: &[PartyMember], characters: &[Character]) -> Vec<Opt
             claim(&mut entries, index, &|m| {
                 (m.level, Some(m.experience_total)) == (character.level, experience)
             });
+        }
+    }
+    for (index, character) in party() {
+        if entries[index].is_none() {
+            claim(&mut entries, index, &|m| m.level == character.level);
         }
     }
     entries
@@ -220,7 +227,11 @@ fn set_field(party: &mut Party, field: Field, value: i32) {
             character.entitled_level = character.level + value;
         }
         Field::Allocated(c, ability) => {
-            if let Some(allocated) = party.characters[c].allocated.as_mut() {
+            let character = &mut party.characters[c];
+            if let Some(allocated) = character.allocated.as_mut() {
+                // The score moves with the points, as the export writes it.
+                let score = &mut character.abilities[ability];
+                *score = (*score + value).saturating_sub(allocated[ability]);
                 allocated[ability] = value;
             }
         }
@@ -353,6 +364,13 @@ impl Session {
             Some(_) => 1,
             None => 2,
         };
+        if item.container {
+            return Err(
+                "Bags, chests and other containers can't be added: a copy would have \
+                        nowhere to keep what goes in it."
+                    .to_owned(),
+            );
+        }
         let is_scroll = |category: &str| category.contains("MagicScroll");
         let scroll = !item.spell.is_empty() || is_scroll(&item.category);
         let rank = |source: &Source| -> Option<(u8, u8, u8)> {
@@ -1382,6 +1400,7 @@ mod tests {
             display,
             kind,
             category,
+            max_stack: 1,
         };
         let data = game_folder_with(
             &dir.join("game"),
@@ -1413,6 +1432,13 @@ mod tests {
                     "Longsword",
                     Kind::Weapon,
                     "",
+                ),
+                item(
+                    "00000000-0000-0000-0000-00000000bbbb",
+                    "OBJ_Bag_AlchemyPouch",
+                    "Alchemy Pouch",
+                    Kind::Object,
+                    "Container",
                 ),
                 item(
                     "00000000-0000-0000-0000-000000002222",
@@ -1457,6 +1483,11 @@ mod tests {
         let plan = session.pattern_for(hero, &fireball).unwrap();
         assert!(plan.spell.is_some());
         assert_eq!(plan.donor, uuid(ROPE));
+        // A bag can't be added: a copy would have no inventory of its own.
+        let bag = session
+            .add_item(hero, "OBJ_Bag_AlchemyPouch", 35.0)
+            .unwrap_err();
+        assert!(bag.contains("containers"), "{bag}");
         // The camp chest gets a copy of the hero's rope.
         let chest_rope = session
             .add_item(Holder::CampChest, "OBJ_Rope", 40.0)
@@ -1552,6 +1583,10 @@ mod tests {
         // The exported save opens with the changes as its starting point.
         let reopened = Session::open(&exported).unwrap();
         assert!(!reopened.is_dirty());
+        // The hero's experience and level-ups no longer match the save's summary, which the
+        // game writes anew only when it next saves, but they are still first and found there.
+        assert_eq!(reopened.order()[0], 0);
+        assert!(reopened.summary_of(0).is_some());
         let hero = &reopened.party().characters[0];
         assert_eq!((hero.experience, hero.entitled_level), (Some(7100), 6));
         assert_eq!(hero.allocated, Some([7, 6, 7, 0, 2, 7]));

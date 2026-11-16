@@ -96,6 +96,8 @@ pub struct CatalogItem {
     pub spell: String,
     /// How many can be in one stack: 1 for an item that doesn't stack.
     pub max_stack: u32,
+    /// Whether it holds other items: a bag, a pouch, a chest.
+    pub container: bool,
 }
 
 /// The game's item templates.
@@ -124,6 +126,9 @@ struct Template {
     spell: String,
     /// `maxStackAmount`, when the template says.
     max_stack: Option<u32>,
+    /// Whether the template itself is a container's: the game names them `CONT_...`, and a
+    /// bag has settings for what it takes in.
+    container: bool,
     parent: String,
 }
 
@@ -182,6 +187,9 @@ fn read_templates(bytes: &[u8], into: &mut HashMap<String, Template>) -> Result<
                     .and_then(|v| v.as_i64())
                     .map(|v| v != 0),
                 spell: use_spell(&lsf, node),
+                container: text_of(&lsf, node, "Name").starts_with("CONT_")
+                    || lsf.get(node, "ContainerAutoAddOnPickup").is_some()
+                    || lsf.get(node, "ContainerContentFilterCondition").is_some(),
                 max_stack: lsf
                     .get(node, "maxStackAmount")
                     .and_then(|v| v.as_i64())
@@ -342,6 +350,9 @@ impl Catalog {
         }
         let story = |key: &str| first(&templates, key, |t| t.story).unwrap_or(false);
         let max_stack = |key: &str| first(&templates, key, |t| t.max_stack).unwrap_or(1);
+        // A container if the template or any it comes from is one.
+        let container =
+            |key: &str| first(&templates, key, |t| t.container.then_some(true)).unwrap_or(false);
         let mut items = Vec::new();
         for (key, template) in &templates {
             if template.kind != "item" {
@@ -359,6 +370,7 @@ impl Catalog {
                 .map(|k| value(k))
                 .find(|v| !v.is_empty())
                 .unwrap_or_default();
+            let kind = entry.and_then(|e| e.file).unwrap_or(Kind::Other);
             items.push(CatalogItem {
                 template: key.clone(),
                 name: template.name.clone(),
@@ -366,12 +378,14 @@ impl Catalog {
                 display: inherited(key, |t| &t.display),
                 description: inherited(key, |t| &t.description),
                 icon: inherited(key, |t| &t.icon),
-                kind: entry.and_then(|e| e.file).unwrap_or(Kind::Other),
+                kind,
                 rarity: value("Rarity"),
                 category,
                 story: story(key),
                 spell: inherited(key, |t| &t.spell),
                 max_stack: max_stack(key),
+                // A weapon can inherit a container's settings without being one.
+                container: kind == Kind::Object && container(key),
             });
         }
 
@@ -587,7 +601,9 @@ pub mod build {
                         handle: value.into(),
                     },
                 ),
-                "StoryItem" => node.attr(field, DataType::Bool, Value::Bool(value == "true")),
+                "StoryItem" | "ContainerAutoAddOnPickup" => {
+                    node.attr(field, DataType::Bool, Value::Bool(value == "true"))
+                }
                 "maxStackAmount" => {
                     node.attr(field, DataType::Int, Value::Int(value.parse().unwrap_or(1)))
                 }
@@ -624,6 +640,8 @@ pub mod build {
         pub kind: Kind,
         /// `ObjectCategory` for an object, `Slot` for armour.
         pub category: &'a str,
+        /// How many fit in one stack: 1 for an item that doesn't stack.
+        pub max_stack: u32,
     }
 
     /// Writes `<dir>/Data` with `Shared.pak` and `Localization/English.pak` holding these
@@ -638,6 +656,7 @@ pub mod build {
                 display,
                 kind: Kind::Object,
                 category: "",
+                max_stack: 1,
             })
             .collect();
         game_folder_with(dir, &items)
@@ -652,15 +671,19 @@ pub mod build {
         let mut texts = Vec::new();
         let handles: Vec<String> = (0..items.len()).map(|i| format!("hname{i}")).collect();
         for (item, handle) in items.iter().zip(&handles) {
-            templates = templates.child(template(
-                item.template,
-                item.stats,
-                &[
-                    ("Type", "item"),
-                    ("Stats", item.stats),
-                    ("DisplayName", handle),
-                ],
-            ));
+            let stack = item.max_stack.to_string();
+            let mut fields = vec![
+                ("Type", "item"),
+                ("Stats", item.stats),
+                ("DisplayName", handle.as_str()),
+            ];
+            if item.max_stack > 1 {
+                fields.push(("maxStackAmount", &stack));
+            }
+            if item.category == "Container" {
+                fields.push(("ContainerAutoAddOnPickup", "true"));
+            }
+            templates = templates.child(template(item.template, item.stats, &fields));
             let (file, category_key) = match item.kind {
                 Kind::Weapon => ("Weapon", ""),
                 Kind::Armor => ("Armor", "Slot"),

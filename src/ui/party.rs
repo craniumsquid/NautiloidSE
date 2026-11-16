@@ -216,9 +216,9 @@ fn character_card(ui: &mut Ui, session: &Session, index: usize, actions: &mut Ve
                     .color(theme::MUTED),
                 );
                 for (ability, name) in party::ABILITIES.iter().enumerate() {
-                    // The score the game will show: its current total, moved by however far
-                    // the points have moved.
-                    let total = character.abilities[ability] as i64 + allocated[ability] as i64
+                    // The score the game will show: the total in the save as opened, moved
+                    // by however far the points have moved.
+                    let total = original.abilities[ability] as i64 + allocated[ability] as i64
                         - before[ability] as i64;
                     let moved = allocated[ability] != before[ability];
                     ui.horizontal(|ui| {

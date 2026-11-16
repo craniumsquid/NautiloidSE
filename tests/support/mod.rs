@@ -1,5 +1,8 @@
 //! Drives the real interface without a window: feeds it input, runs frames, finds what it
 //! drew, and saves pictures of it.
+//!
+//! Shared by several test files, each of which uses only some of it.
+#![allow(dead_code)]
 
 pub mod raster;
 
@@ -51,6 +54,8 @@ pub struct Harness {
     /// What the last frame drew.
     shapes: Vec<egui::epaint::ClippedShape>,
     pixels_per_point: f32,
+    /// Screen pixels per point: 1, or 2 for pictures people will look at.
+    scale: f32,
     /// Viewport commands the app sent in the last frame.
     pub commands: Vec<egui::ViewportCommand>,
 }
@@ -91,6 +96,7 @@ impl Harness {
             close_requested: false,
             shapes: Vec::new(),
             pixels_per_point: 1.0,
+            scale: 1.0,
             commands: Vec::new(),
         };
         harness.settle();
@@ -109,7 +115,7 @@ impl Harness {
             ..RawInput::default()
         };
         let viewport = raw.viewports.entry(ViewportId::ROOT).or_default();
-        viewport.native_pixels_per_point = Some(1.0);
+        viewport.native_pixels_per_point = Some(self.scale);
         if std::mem::take(&mut self.close_requested) {
             viewport.events.push(ViewportEvent::Close);
         }
@@ -288,12 +294,19 @@ impl Harness {
     }
 
     /// Saves a picture of the screen as it stands to `target/ui-snapshots/<name>.png`.
+    /// Draws at `scale` screen pixels per point from now on: 2 for sharp pictures.
+    pub fn set_scale(&mut self, scale: f32) {
+        self.scale = scale;
+        self.settle();
+    }
+
     pub fn snapshot(&mut self, name: &str) {
         self.frame();
         let primitives = self
             .ctx
             .tessellate(self.shapes.clone(), self.pixels_per_point);
-        let (width, height) = (self.size.x as usize, self.size.y as usize);
+        let width = (self.size.x * self.pixels_per_point).round() as usize;
+        let height = (self.size.y * self.pixels_per_point).round() as usize;
         let background = theme::BG.to_array();
         let pixels = self.renderer.render(
             &primitives,

@@ -279,6 +279,8 @@ fn party_edits_read_back_from_a_written_save() {
         expected.characters[0].experience = Some(experience + 123);
         expected.characters[0].entitled_level += 1;
         expected.characters[0].allocated.as_mut().unwrap()[0] += 1;
+        // The score moves with the points, as the game will work it out.
+        expected.characters[0].abilities[0] += 1;
         if let Some(stack) = gold {
             for c in &mut expected.characters {
                 for g in &mut c.gold {

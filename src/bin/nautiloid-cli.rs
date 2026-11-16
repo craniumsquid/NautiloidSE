@@ -1597,9 +1597,16 @@ fn catalog(args: &Args, out: &mut impl Write) -> Result<()> {
     )?;
     let listed = catalog.listed().count();
     let story = catalog.listed().filter(|i| i.story).count();
+    let containers: Vec<&str> = catalog
+        .listed()
+        .filter(|i| i.container)
+        .map(|i| i.display.as_str())
+        .collect();
     writeln!(
         out,
-        "{listed} offered for adding, {story} of them story items"
+        "{listed} offered for adding, {story} of them story items, {} containers: {}",
+        containers.len(),
+        containers.join(", ")
     )?;
     let find = args.get("find").map(str::to_lowercase);
     let limit = args.number("limit")?.unwrap_or(40);
@@ -1620,7 +1627,11 @@ fn catalog(args: &Args, out: &mut impl Write) -> Result<()> {
             item.kind.label(),
             item.rarity,
             item.category,
-            if item.story { "story" } else { "" },
+            match (item.story, item.container) {
+                (true, _) => "story",
+                (_, true) => "cont",
+                _ => "",
+            },
             item.max_stack,
             item.template
         )?;
