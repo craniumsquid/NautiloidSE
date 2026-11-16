@@ -97,11 +97,22 @@ fn shared(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
         widgets::section_title(ui, "The party");
         ui.add_space(2.0);
         match party.inspiration {
-            Some(inspiration) => {
-                let hint = format!("Up to {} in this save.", inspiration.max);
+            Some(_) => {
+                let hint = format!(
+                    "The game allows {} at most, unless a mod lifts that.",
+                    party::INSPIRATION_CAP
+                );
                 widgets::row(ui, "Inspiration", Some(&hint), |ui| {
                     field_stepper(ui, session, Field::Inspiration, 1, 56.0, actions);
                 });
+                if let Some(warning) = session.inspiration_warning() {
+                    ui.label(
+                        egui::RichText::new(format!("⚠ {warning}"))
+                            .font(theme::body(13.0))
+                            .color(theme::CORAL),
+                    );
+                    ui.add_space(4.0);
+                }
             }
             None => widgets::row(
                 ui,

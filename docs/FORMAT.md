@@ -200,6 +200,12 @@ Not every party member has all of this. A character played as an origin has an e
 in the character creation record (Gale, in the Honour Mode sample), and a game that has only
 just begun has no Inspiration resource yet.
 
+For Inspiration the second number in the resource entry, a maximum for other resources, is no
+limit: in every sample it equals the amount (1 of 1, 4 of 4, 6 of 6). The editor raises it
+with an amount that passes it and leaves it alone when lowering, which is how the lowering
+tried in the game was written. The game by itself allows 4 points; one sample campaign,
+played with a mod that lifts that, has 6.
+
 ### Who is a character
 
 - The party is whoever owns a `game.experience.v0.ExperienceComponent` row. They also own

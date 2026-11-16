@@ -89,7 +89,9 @@ Use **−** and **+** to change a number, or click the number and type a new one
   character's other bonuses added.
 - **Gold**: how much gold the character carries. A character who carries none can't be given
   any here.
-- **Inspiration** (at the top): your party's Inspiration points.
+- **Inspiration** (at the top): your party's Inspiration points. The game allows 4 at most.
+  You can set more, but only if you play with a mod that lifts that limit; the app warns you
+  when you pass 4.
 
 Companions at camp have no experience of their own: the game gives them the party's when
 they join.

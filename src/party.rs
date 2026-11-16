@@ -229,9 +229,15 @@ const COMPANIONS: [(&str, &str); 6] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Inspiration {
     pub amount: u32,
-    /// The most the save allows. The game's own cap is 4; mods raise it.
+    /// The number the save keeps beside the amount, where other resources keep their
+    /// maximum. For Inspiration it is no limit: in every real save it equals the amount.
     pub max: u32,
 }
+
+/// The most Inspiration the game allows by itself. Mods raise it.
+pub const INSPIRATION_CAP: u32 = 4;
+/// The most Inspiration the editor will set.
+pub const MAX_INSPIRATION: u32 = 20;
 
 /// The party, the companions at camp, and what the party shares.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -843,16 +849,24 @@ pub fn set_amount(entities: &mut NewAge, item: Uuid, amount: u32) -> Result<()> 
     entities.set_data(at, &amount.to_le_bytes())
 }
 
-/// Sets the party's Inspiration points, up to the maximum the save already allows.
+/// Sets the party's Inspiration points. The number kept beside the amount, a maximum for
+/// other resources, equals the amount in every real save, so it is raised along with an
+/// amount that passes it. Lowering leaves it alone, as tried in the game.
 pub fn set_inspiration(entities: &mut NewAge, amount: u32) -> Result<()> {
     let party = party_entity(entities).ok_or_else(|| anyhow!("the save has no party entity"))?;
     let at = resource(entities, party, inspiration_id())?
         .ok_or_else(|| anyhow!("the party has no Inspiration resource"))?;
-    let max = whole(entities.data(at + tables::RESOURCE_MAX as u64, 8)?)?;
     ensure!(
-        amount <= max,
-        "this save allows at most {max} Inspiration points"
+        amount <= MAX_INSPIRATION,
+        "the editor sets at most {MAX_INSPIRATION} Inspiration points"
     );
+    let max = whole(entities.data(at + tables::RESOURCE_MAX as u64, 8)?)?;
+    if amount > max {
+        entities.set_data(
+            at + tables::RESOURCE_MAX as u64,
+            &(amount as f64).to_le_bytes(),
+        )?;
+    }
     entities.set_data(
         at + tables::RESOURCE_AMOUNT as u64,
         &(amount as f64).to_le_bytes(),
@@ -1768,10 +1782,18 @@ mod tests {
             set_gold(&mut entities, uuid(TRADER_GOLD), 5).is_ok(),
             "any stack can be set"
         );
+        // Past the number kept beside it, which goes up too.
+        let globals = sample_globals();
+        set_inspiration(&mut entities, 6).unwrap();
+        let party = read(&globals, &entities).unwrap();
+        assert_eq!(party.inspiration, Some(Inspiration { amount: 6, max: 6 }));
+        // Lowering leaves that number alone.
+        set_inspiration(&mut entities, 0).unwrap();
+        let party = read(&globals, &entities).unwrap();
+        assert_eq!(party.inspiration, Some(Inspiration { amount: 0, max: 6 }));
         assert!(
-            set_inspiration(&mut entities, 5).is_err(),
-            "over the save's maximum"
+            set_inspiration(&mut entities, MAX_INSPIRATION + 1).is_err(),
+            "over the editor's limit"
         );
-        assert!(set_inspiration(&mut entities, 0).is_ok());
     }
 }

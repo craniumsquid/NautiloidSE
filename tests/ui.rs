@@ -389,6 +389,22 @@ const PLUS_LEVEL_UPS: usize = 2;
 const PLUS_STRENGTH: usize = 3;
 
 #[test]
+fn inspiration_past_the_games_limit_shows_a_warning() {
+    use nautiloid_save_editor::session::Field;
+    let (dir, mut ui) = open_sample("inspiration");
+    // From 3 to 4, the most the game allows by itself.
+    ui.click_nth("+", PLUS_INSPIRATION);
+    assert!(!ui.sees("make sure a mod"));
+    // And past it.
+    ui.click_nth("+", PLUS_INSPIRATION);
+    assert_eq!(ui.app.session().unwrap().value(Field::Inspiration), Some(5));
+    assert!(ui.sees("The game allows 4 Inspiration points at most."));
+    assert!(ui.sees("make sure a mod"));
+    ui.snapshot("03b-inspiration-warning");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn edits_are_listed_and_can_be_undone_and_reverted() {
     use nautiloid_save_editor::session::Field;
     let (dir, mut ui) = open_sample("edit");

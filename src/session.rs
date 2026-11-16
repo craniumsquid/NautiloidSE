@@ -597,6 +597,19 @@ impl Session {
         self.value(field) != self.original_value(field)
     }
 
+    /// A warning for Inspiration raised past what the game allows by itself.
+    pub fn inspiration_warning(&self) -> Option<String> {
+        let now = self.party().inspiration?.amount;
+        let before = self.original.inspiration?.amount;
+        (now > party::INSPIRATION_CAP && now > before).then(|| {
+            format!(
+                "The game allows {} Inspiration points at most. To keep {now}, make sure a mod \
+                 that lifts that limit is active when you load the save.",
+                party::INSPIRATION_CAP
+            )
+        })
+    }
+
     /// The values the field can take.
     pub fn range(&self, field: Field) -> RangeInclusive<i32> {
         match field {
@@ -607,7 +620,11 @@ impl Session {
             }
             Field::Allocated(..) => 0..=signed(party::MAX_ALLOCATED),
             Field::Gold(..) => 1..=MAX_GOLD,
-            Field::Inspiration => 0..=signed(self.original.inspiration.map_or(0, |i| i.max)),
+            // The number a save keeps beside the amount is no limit: it equals the amount.
+            Field::Inspiration => {
+                let now = self.original.inspiration.map_or(0, |i| i.amount);
+                0..=signed(party::MAX_INSPIRATION.max(now))
+            }
             Field::Approval(..) => {
                 // The game's own range, widened to take in a rating a mod has put outside.
                 let now = self.original_value(field).unwrap_or(0);
@@ -1241,7 +1258,7 @@ mod tests {
         assert_eq!(session.value(Field::Gold(1, 0)), None);
         assert_eq!(session.value(Field::Experience(9)), None);
         assert_eq!(session.range(Field::LevelUps(0)), 0..=15);
-        assert_eq!(session.range(Field::Inspiration), 0..=4);
+        assert_eq!(session.range(Field::Inspiration), 0..=20);
         assert!(!session.is_dirty() && session.changes().is_empty());
         assert!(!session.can_undo() && !session.can_redo());
         std::fs::remove_dir_all(&dir).unwrap();
@@ -1258,9 +1275,18 @@ mod tests {
         session.set(Field::Inspiration, 99, 40.0);
         assert_eq!(
             session.value(Field::Inspiration),
-            Some(4),
-            "clamped to the save's maximum"
+            Some(20),
+            "clamped to the editor's limit"
         );
+        // Past the game's own limit of 4, which only a mod lifts.
+        let warning = session.inspiration_warning().unwrap();
+        assert!(
+            warning.contains("4 Inspiration points at most"),
+            "{warning}"
+        );
+        assert!(warning.contains("To keep 20"), "{warning}");
+        session.set(Field::Inspiration, 4, 40.1);
+        assert_eq!(session.inspiration_warning(), None);
         assert_eq!(session.party().characters[0].entitled_level, 6);
 
         let changes = session.changes();
