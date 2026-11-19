@@ -229,10 +229,7 @@ fn more_button(
     item: &Item,
     actions: &mut Vec<Action>,
 ) {
-    let known = session
-        .catalog()
-        .and_then(|c| c.by_stats(&item.stats))
-        .cloned();
+    let known = session.addable(&item.stats);
     let why_not = match &known {
         None if session.catalog().is_none() => {
             Some("Needs the game's files, for what items there are.".to_owned())

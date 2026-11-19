@@ -97,7 +97,9 @@ character or the camp chest, up to 20 of each per export.
   manual saves they are listed by their names.
 - Before any table of records is moved to add to it, the editor checks the save for pointers
   into that table it doesn't know about, and refuses rather than leave them behind.
-- Not done: items from mods, whose names are in the mods' own files.
+- An item from a mod, which the game's files don't list, can be added as a plain copy of one
+  the save has: the + beside it. It can't be made from anything else, or found under Add
+  items, until the mods' own files are read; that is under way.
 
 ### Stretch goal
 

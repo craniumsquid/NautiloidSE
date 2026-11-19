@@ -352,6 +352,58 @@ impl Session {
         self.catalog = Some(catalog);
     }
 
+    /// What an item with game name `stats` is, to add more of it: as the game's files have it,
+    /// or else, for an item from a mod the save has, what the save says of it, which is
+    /// enough for plain copies. `None` before the game's files have been read, or for an
+    /// item neither has.
+    pub fn addable(&self, stats: &str) -> Option<CatalogItem> {
+        let catalog = self.catalog.as_ref()?;
+        if let Some(known) = catalog.by_stats(stats) {
+            return Some(known.clone());
+        }
+        let items: Vec<&party::Item> = self
+            .original
+            .inventories
+            .iter()
+            .flat_map(|i| &i.items)
+            .filter(|i| i.stats == stats)
+            .collect();
+        let first = items.first()?;
+        // It stacks if the save has a stack of it, as far as the biggest one.
+        let max_stack = items
+            .iter()
+            .filter(|i| i.stacked)
+            .map(|i| i.amount)
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        Some(CatalogItem {
+            template: first.template.to_lowercase(),
+            name: String::new(),
+            stats: stats.to_owned(),
+            display: String::new(),
+            description: String::new(),
+            icon: String::new(),
+            kind: Kind::Other,
+            rarity: String::new(),
+            category: String::new(),
+            story: false,
+            spell: String::new(),
+            max_stack,
+            // It is in an inventory, so it can be picked up; and the copy is of one that
+            // holds nothing, as every donor is.
+            container: false,
+            pickable: true,
+        })
+    }
+
+    /// Whether the game's files list this item, so that it can be made from another.
+    fn in_game_files(&self, stats: &str) -> bool {
+        self.catalog
+            .as_ref()
+            .is_some_and(|c| c.by_stats(stats).is_some())
+    }
+
     /// The game's items, once read from the game's files.
     pub fn catalog(&self) -> Option<&Catalog> {
         self.catalog.as_deref()
@@ -381,11 +433,14 @@ impl Session {
         }
         let is_scroll = |category: &str| category.contains("MagicScroll");
         let scroll = !item.spell.is_empty() || is_scroll(&item.category);
+        // An item the game's files don't list, from a mod, can only be a plain copy of one
+        // the save has: making another item into it would need its template's details.
+        let only_copies = !self.in_game_files(&item.stats);
         let rank = |source: &Source| -> Option<(u8, u8, u8)> {
             let donor = &source.donor;
             let what = if donor.stats == item.stats {
                 0
-            } else if !donor.root {
+            } else if only_copies || !donor.root {
                 return None;
             } else if scroll {
                 // A scroll's spell is in records of its own, which only a scroll has; the game
@@ -413,7 +468,12 @@ impl Session {
             .min_by_key(|(rank, _)| *rank)
             .map(|(_, source)| source);
         let Some(source) = best else {
-            return Err("There is nothing in this save to make one from.".to_owned());
+            return Err(match only_copies {
+                true => "The game's files don't have this item, and nobody in the save has \
+                         one to copy."
+                    .to_owned(),
+                false => "There is nothing in this save to make one from.".to_owned(),
+            });
         };
         let same = source.donor.stats == item.stats;
         let spell = (!same && scroll).then(|| item.spell.clone());
@@ -438,10 +498,7 @@ impl Session {
         time: f64,
     ) -> Result<usize, String> {
         let item = self
-            .catalog
-            .as_ref()
-            .and_then(|c| c.by_stats(stats))
-            .cloned()
+            .addable(stats)
             .ok_or_else(|| "The game's files have no such item.".to_owned())?;
         let index = match self
             .additions
@@ -1607,6 +1664,70 @@ mod tests {
                 "{name}"
             );
         }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn adds_copies_of_items_the_game_files_do_not_list() {
+        use crate::catalog::build::{game_folder_with, GameItem};
+        use party::build::{uuid, POTIONS, ROPE};
+        use party::Holder;
+        let dir = temp_dir("mod-items");
+        let folder = build::sample_save(&dir, "QuickSave_3").unwrap();
+        let mut session = Session::open(&folder).unwrap();
+        // Game files that list only a longsword: the rope and the healing potions the hero
+        // carries are, as far as they say, a mod's.
+        let data = game_folder_with(
+            &dir.join("game"),
+            &[GameItem {
+                template: "00000000-0000-0000-0000-000000005555",
+                stats: "WPN_Longsword",
+                display: "Longsword",
+                kind: Kind::Weapon,
+                category: "",
+                max_stack: 1,
+            }],
+        )
+        .unwrap();
+        session.set_catalog(Arc::new(Catalog::from_game(&data).unwrap()));
+        let hero = Holder::Character(0);
+
+        // A single item: plain copies of the one the save has.
+        let rope = session.add_item(hero, "OBJ_Rope", 0.0).unwrap();
+        let addition = &session.additions()[rope];
+        assert!(addition.plan.same);
+        assert_eq!(addition.plan.donor, uuid(ROPE));
+        assert!(!addition.stacked);
+        assert_eq!(session.range(Field::Add(rope)), 0..=MAX_ADDED);
+        session.set(Field::Add(rope), 2, 10.0);
+        // A stack: a new stack, as big as the biggest the save has of it.
+        let potions = session.add_item(hero, "OBJ_Potion_Healing", 20.0).unwrap();
+        let addition = &session.additions()[potions];
+        assert!(addition.stacked);
+        assert_eq!(addition.plan.donor, uuid(POTIONS));
+        assert_eq!(session.range(Field::Add(potions)), 0..=3);
+        session.set(Field::Add(potions), 3, 30.0);
+        // Nothing can be made into one from something else, and what the save doesn't
+        // have can't be added at all.
+        let mut sword = session.addable("WPN_Longsword").unwrap();
+        sword.stats = "OBJ_Not_Here".to_owned();
+        let why = session.pattern_for(hero, &sword).unwrap_err();
+        assert!(why.contains("nobody in the save has one to copy"), "{why}");
+        assert!(session.add_item(hero, "OBJ_Not_Here", 40.0).is_err());
+
+        // The export writes them and checks them, as for any other item.
+        let exported = session.export(&dir, "With mod items").unwrap();
+        let written = Session::open(&exported).unwrap();
+        let count = |stats: &str| -> (usize, u32) {
+            let items: Vec<&party::Item> = written.original().inventories[0]
+                .items
+                .iter()
+                .filter(|i| i.stats == stats)
+                .collect();
+            (items.len(), items.iter().map(|i| i.amount).sum())
+        };
+        assert_eq!(count("OBJ_Rope"), (3, 3));
+        assert_eq!(count("OBJ_Potion_Healing"), (2, 6));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

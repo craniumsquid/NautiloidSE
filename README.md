@@ -27,7 +27,8 @@ The party, and the companions waiting at camp:
 - **Inventory**: how many each stack holds, for every character and the camp chest. Food
   shows the camp supplies it is worth, and the game's supplies total follows it. Items have
   the names players see, read from your own install of the game; nothing from the game is
-  shipped with the editor. Items added by mods keep their internal names for now.
+  shipped with the editor. Items added by mods keep their internal names for now, and can be
+  added only as copies of one the save already has.
 - **Adding items**, any of the game's items, searched by name. A new item is a copy of the
   closest item anywhere in the save (the same item if anyone has one, else one like it,
   equipped or not, the party's or anyone else's), made into the item you pick. A scroll is

@@ -218,6 +218,12 @@ item factory that is in an inventory and isn't a container (`items::donors`). It
 Only an item made from one of the game's own templates (`TemplateType` 0 in its creator) can
 be made into another.
 
+An item the catalog doesn't list, which in practice is a mod's, can still be added as a
+plain copy (`Session::addable`): the save gives its game name and template, the copy keeps
+every record of the original, and nothing has to be known about it. `pattern_for` then takes
+only a donor with the same game name. It stacks if the save has a stack of it, up to the
+biggest; a container never is a donor. Like the original, the copy needs the mod active.
+
 ### Copying (`items::copy_into`)
 
 The copy goes into the holder's main inventory, the one their `OwnerComponent` names, and
@@ -340,7 +346,8 @@ from the templates like the rest: all 45,398 items carried in the sample saves h
 an item without it, such as the Bag of Rotten Food that's thrown in a fight, shows as a blank
 slot in an inventory. Where several templates share a game name, one that can be picked up
 is preferred. Items added by mods aren't in it: their
-templates and text are in the mods' own packages, which the editor doesn't read yet.
+templates and text are in the mods' own packages, which the editor doesn't read yet. One the
+save has can still be copied (see Choosing the donor).
 
 ## The story state (read only)
 

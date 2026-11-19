@@ -162,7 +162,9 @@ A few things to know:
 - An item marked as a **story item** shows a warning. Quests sometimes expect there to be only
   one of these, so a second one may confuse them.
 - Items that come from **mods** show a rough name made from their internal name, instead of
-  their proper name, and can't be found under Add.
+  their proper name, and can't be found under **Add items…**. If someone already carries
+  one, the **+** beside it adds copies of it. Keep the mod active: like the original, a copy
+  needs it.
 
 ## 6. Change approval
 
