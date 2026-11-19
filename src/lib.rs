@@ -1,7 +1,9 @@
 //! Reading and writing Baldur's Gate 3 saves.
 //!
 //! * [`lspk`]: the `.lsv` package that holds a save's files.
-//! * [`lsf`]: the `.lsf` documents inside it.
+//! * [`lsf`]: the `.lsf` documents inside it, and [`lsx`], their XML form, which mods carry.
+//! * [`xml`]: a small reader for the XML files mods carry.
+//! * [`modfiles`]: the player's active mods, read for the items they add.
 //! * [`value`]: the typed values those documents carry.
 //! * [`newage`]: the entity data blob inside `Globals.lsf` and the level caches.
 //! * [`save`]: a save as a whole.
@@ -17,6 +19,8 @@ pub mod diff;
 pub mod items;
 pub mod lsf;
 pub mod lspk;
+pub mod lsx;
+pub mod modfiles;
 pub mod mods;
 pub mod newage;
 pub mod party;
@@ -26,3 +30,4 @@ pub mod session;
 pub mod story;
 pub mod ui;
 pub mod value;
+pub mod xml;

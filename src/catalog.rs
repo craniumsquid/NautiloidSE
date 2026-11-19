@@ -20,6 +20,7 @@
 
 use crate::lsf::{Lsf, NodeId};
 use crate::lspk;
+use crate::modfiles::{ModFiles, ModSetup};
 use anyhow::{anyhow, ensure, Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -101,6 +102,10 @@ pub struct CatalogItem {
     /// Whether it can be picked up (`CanBePickedUp`, from its templates). Every item the
     /// sample saves have in an inventory can; one that can't shows as a blank slot.
     pub pickable: bool,
+    /// The mod whose template it is, by name, or empty for the game's own.
+    pub module: String,
+    /// That mod's identifier, in lower case.
+    pub module_id: String,
 }
 
 /// The game's item templates.
@@ -112,6 +117,10 @@ pub struct Catalog {
     /// One of each item players can tell apart: the main template of each game name that
     /// has an English name, by name.
     listed: Vec<usize>,
+    /// The mods read, by name, in load order.
+    pub mods: Vec<String>,
+    /// Active mods with no package in the `Mods` folder, and mod files that couldn't be read.
+    pub mod_problems: Vec<String>,
 }
 
 /// A template as read, before its parent fills it in.
@@ -138,6 +147,9 @@ struct Template {
     /// `CanBePickedUp`, when the template says.
     pickable: Option<bool>,
     parent: String,
+    /// The mod it comes from, by name and identifier, or empty.
+    module: String,
+    module_id: String,
 }
 
 /// A stats entry as read, before its `using` fills it in.
@@ -172,29 +184,34 @@ fn use_spell(lsf: &Lsf, template: NodeId) -> String {
 
 /// Reads every template in a root template list.
 fn read_templates(bytes: &[u8], into: &mut HashMap<String, Template>) -> Result<()> {
-    let lsf = Lsf::parse(bytes)?;
+    read_template_list(&Lsf::parse(bytes)?, None, into);
+    Ok(())
+}
+
+/// Reads every template in a root template list, as from `module`.
+fn read_template_list(lsf: &Lsf, module: Option<&ModFiles>, into: &mut HashMap<String, Template>) {
     let Some(root) = lsf.root("Templates") else {
-        return Ok(());
+        return;
     };
     for node in lsf.children_named(root, "GameObjects") {
-        let key = text_of(&lsf, node, "MapKey").to_lowercase();
+        let key = text_of(lsf, node, "MapKey").to_lowercase();
         if key.is_empty() {
             continue;
         }
         into.insert(
             key,
             Template {
-                name: text_of(&lsf, node, "Name"),
-                kind: text_of(&lsf, node, "Type"),
-                stats: text_of(&lsf, node, "Stats"),
-                display: text_of(&lsf, node, "DisplayName"),
-                description: text_of(&lsf, node, "Description"),
-                icon: text_of(&lsf, node, "Icon"),
+                name: text_of(lsf, node, "Name"),
+                kind: text_of(lsf, node, "Type"),
+                stats: text_of(lsf, node, "Stats"),
+                display: text_of(lsf, node, "DisplayName"),
+                description: text_of(lsf, node, "Description"),
+                icon: text_of(lsf, node, "Icon"),
                 story: lsf
                     .get(node, "StoryItem")
                     .and_then(|v| v.as_i64())
                     .map(|v| v != 0),
-                spell: use_spell(&lsf, node),
+                spell: use_spell(lsf, node),
                 inventory_type: lsf.get(node, "InventoryType").and_then(|v| v.as_i64()),
                 bag: lsf.get(node, "ContainerAutoAddOnPickup").is_some()
                     || lsf.get(node, "ContainerContentFilterCondition").is_some(),
@@ -206,11 +223,12 @@ fn read_templates(bytes: &[u8], into: &mut HashMap<String, Template>) -> Result<
                     .get(node, "maxStackAmount")
                     .and_then(|v| v.as_i64())
                     .map(|v| v.clamp(1, u32::MAX as i64) as u32),
-                parent: text_of(&lsf, node, "ParentTemplateId").to_lowercase(),
+                parent: text_of(lsf, node, "ParentTemplateId").to_lowercase(),
+                module: module.map(|m| m.name.clone()).unwrap_or_default(),
+                module_id: module.map(|m| m.uuid.clone()).unwrap_or_default(),
             },
         );
     }
-    Ok(())
 }
 
 /// The quoted strings on a line of a stats file.
@@ -218,21 +236,22 @@ fn quoted(line: &str) -> Vec<&str> {
     line.split('"').skip(1).step_by(2).collect()
 }
 
-/// Reads every entry in a stats file.
-fn read_stats(text: &str, file: Kind, into: &mut HashMap<String, StatsEntry>) {
+/// Reads every entry in a stats file. An entry's kind is the file's, `file`, unless its
+/// `type` line says (mods put every kind in files with names of their own).
+fn read_stats(text: &str, file: Option<Kind>, into: &mut HashMap<String, StatsEntry>) {
     let mut current: Option<String> = None;
     for line in text.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("new entry ") {
+            // An entry declared again is added to, not replaced: mods change one value of
+            // the game's `ARM_Robe_Body` by declaring it again, `using` itself, with that
+            // value alone.
             let name = quoted(rest).first().map(|s| s.to_string());
             if let Some(name) = &name {
-                into.insert(
-                    name.clone(),
-                    StatsEntry {
-                        file: Some(file),
-                        ..StatsEntry::default()
-                    },
-                );
+                into.entry(name.clone()).or_insert(StatsEntry {
+                    file,
+                    ..StatsEntry::default()
+                });
             }
             current = name;
             continue;
@@ -240,9 +259,20 @@ fn read_stats(text: &str, file: Kind, into: &mut HashMap<String, StatsEntry>) {
         let Some(entry) = current.as_ref().and_then(|name| into.get_mut(name)) else {
             continue;
         };
-        if let Some(rest) = line.strip_prefix("using ") {
-            if let Some(parent) = quoted(rest).first() {
-                entry.using = parent.to_string();
+        if let Some(rest) = line.strip_prefix("type ") {
+            entry.file = match quoted(rest).first().copied() {
+                Some("Object") => Some(Kind::Object),
+                Some("Armor") => Some(Kind::Armor),
+                Some("Weapon") => Some(Kind::Weapon),
+                Some(_) => None,
+                None => entry.file,
+            };
+        } else if let Some(rest) = line.strip_prefix("using ") {
+            match quoted(rest).first() {
+                // Using itself: what it already is.
+                Some(parent) if Some(*parent) == current.as_deref() => {}
+                Some(parent) => entry.using = parent.to_string(),
+                None => {}
             }
         } else if let Some(rest) = line.strip_prefix("data ") {
             if let [key, value, ..] = quoted(rest)[..] {
@@ -322,9 +352,43 @@ pub fn read_language(bytes: &[u8], wanted: &HashSet<String>) -> Result<HashMap<S
     Ok(out)
 }
 
+/// English text in the XML form mods carry: `<content contentuid="h…">text</content>`.
+pub fn read_language_xml(text: &str) -> Result<HashMap<String, String>> {
+    let mut out = HashMap::new();
+    let mut handle: Option<String> = None;
+    let mut body = String::new();
+    for event in crate::xml::read(text)? {
+        match event {
+            crate::xml::Event::Start { ref name, .. } if name == "content" => {
+                handle = event.attribute("contentuid").map(str::to_owned);
+                body.clear();
+            }
+            crate::xml::Event::Text(text) if handle.is_some() => body.push_str(&text),
+            crate::xml::Event::End { name } if name == "content" => {
+                if let Some(handle) = handle.take() {
+                    out.insert(handle, std::mem::take(&mut body));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
 impl Catalog {
     /// Builds the catalog from the game's files, each fetched by the name packages give it.
-    pub fn build(mut fetch: impl FnMut(&str) -> Result<Option<Vec<u8>>>) -> Result<Catalog> {
+    pub fn build(fetch: impl FnMut(&str) -> Result<Option<Vec<u8>>>) -> Result<Catalog> {
+        Catalog::build_with(fetch, &[])
+    }
+
+    /// Builds the catalog from the game's files and then the mods', in load order: a mod's
+    /// template, stats entry or text replaces the game's, or an earlier mod's, of the same
+    /// identifier, name or handle. A mod file that can't be read is passed over and noted.
+    pub fn build_with(
+        mut fetch: impl FnMut(&str) -> Result<Option<Vec<u8>>>,
+        mods: &[ModFiles],
+    ) -> Result<Catalog> {
+        let mut mod_problems = Vec::new();
         let mut templates = HashMap::new();
         let mut stats = HashMap::new();
         let mut found_templates = false;
@@ -340,7 +404,7 @@ impl Catalog {
             {
                 let name = format!("Public/{module}/Stats/Generated/Data/{file}.txt");
                 if let Some(bytes) = fetch(&name)? {
-                    read_stats(&String::from_utf8_lossy(&bytes), kind, &mut stats);
+                    read_stats(&String::from_utf8_lossy(&bytes), Some(kind), &mut stats);
                 }
             }
         }
@@ -348,6 +412,21 @@ impl Catalog {
             found_templates,
             "none of the game's item templates were found"
         );
+        for module in mods {
+            for (name, bytes) in &module.templates {
+                let doc = match name.to_lowercase().ends_with(".lsx") {
+                    true => crate::lsx::read(&String::from_utf8_lossy(bytes)),
+                    false => Lsf::parse(bytes),
+                };
+                match doc {
+                    Ok(doc) => read_template_list(&doc, Some(module), &mut templates),
+                    Err(e) => mod_problems.push(format!("{}: {name}: {e:#}", module.name)),
+                }
+            }
+            for (_, bytes) in &module.stats {
+                read_stats(&String::from_utf8_lossy(bytes), None, &mut stats);
+            }
+        }
 
         // A template's missing values come from its parents.
         let inherited = |key: &str, field: fn(&Template) -> &str| -> String {
@@ -442,6 +521,8 @@ impl Catalog {
                     && (max_stack(key) <= 1 || from_container_base(key))
                     && !stats_uses(&stats, &stats_name, THROWN),
                 pickable: pickable(key),
+                module: template.module.clone(),
+                module_id: template.module_id.clone(),
             });
         }
 
@@ -451,10 +532,22 @@ impl Catalog {
             .flat_map(|i| [i.display.clone(), i.description.clone()])
             .filter(|h| !h.is_empty())
             .collect();
-        let texts = match fetch(LANGUAGE)? {
+        let mut texts = match fetch(LANGUAGE)? {
             Some(bytes) => read_language(&bytes, &wanted).context(LANGUAGE)?,
             None => HashMap::new(),
         };
+        for module in mods {
+            for (name, bytes) in &module.texts {
+                let read = match name.to_lowercase().ends_with(".loca") {
+                    true => read_language(bytes, &wanted),
+                    false => read_language_xml(&String::from_utf8_lossy(bytes)),
+                };
+                match read {
+                    Ok(read) => texts.extend(read.into_iter().filter(|(h, _)| wanted.contains(h))),
+                    Err(e) => mod_problems.push(format!("{}: {name}: {e:#}", module.name)),
+                }
+            }
+        }
         for item in &mut items {
             item.display = texts.get(&item.display).cloned().unwrap_or_default();
             item.description = texts.get(&item.description).cloned().unwrap_or_default();
@@ -480,11 +573,14 @@ impl Catalog {
                 }
             }
         }
-        for name in stats.keys() {
+        for (name, entry) in &stats {
             let root = stats_value(&stats, name, "RootTemplate").map(str::to_lowercase);
             if let Some(&i) = root.and_then(|root| by_template.get(&root)) {
                 let current = by_stats.get(name).map(|&c| items[c].pickable);
-                if items[i].pickable || current != Some(true) {
+                // A root template the entry only has from the one it uses is that one's:
+                // mods' Fey Coin uses the game's gold coin, and is its own template.
+                let own = entry.data.contains_key("RootTemplate");
+                if (own || current.is_none()) && (items[i].pickable || current != Some(true)) {
                     by_stats.insert(name.clone(), i);
                 }
             }
@@ -511,12 +607,41 @@ impl Catalog {
             by_template,
             by_stats,
             listed,
+            mods: mods.iter().map(|m| m.name.clone()).collect(),
+            mod_problems,
         })
+    }
+
+    /// Builds the catalog from the game's `Data` folder and the player's active mods.
+    /// Mods that can't be read at all leave the game's items, with the reason noted.
+    pub fn from_game_and_mods(data: &Path, mods: &ModSetup) -> Result<Catalog> {
+        let loaded = match crate::modfiles::read(mods) {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                let mut catalog = Catalog::from_game(data)?;
+                catalog
+                    .mod_problems
+                    .push(format!("the mods couldn't be read: {e:#}"));
+                return Ok(catalog);
+            }
+        };
+        let mut catalog = Catalog::from_game_with(data, &loaded.mods)?;
+        let missing = loaded
+            .missing
+            .into_iter()
+            .map(|m| format!("{m}: not in the Mods folder"));
+        catalog.mod_problems.splice(0..0, missing);
+        Ok(catalog)
     }
 
     /// Builds the catalog from the packages in the game's `Data` folder, reading only the
     /// files it needs out of them.
     pub fn from_game(data: &Path) -> Result<Catalog> {
+        Catalog::from_game_with(data, &[])
+    }
+
+    /// Builds the catalog from the game's `Data` folder and mods already read.
+    pub fn from_game_with(data: &Path, mods: &[ModFiles]) -> Result<Catalog> {
         let wanted = wanted_files();
         let mut packages: Vec<PathBuf> = std::fs::read_dir(data)
             .with_context(|| data.display().to_string())?
@@ -556,19 +681,27 @@ impl Catalog {
                 }
             }
         }
-        Catalog::build(|name| Ok(contents.remove(name)))
+        Catalog::build_with(|name| Ok(contents.remove(name)), mods)
     }
 
     /// Builds the catalog from a folder holding the same files loose, at the paths the
     /// packages give them (as the command-line tool's `catalog-files` writes them).
     pub fn from_folder(folder: &Path) -> Result<Catalog> {
-        Catalog::build(|name| {
-            let path = folder.join(name);
-            match path.is_file() {
-                true => Ok(Some(std::fs::read(&path)?)),
-                false => Ok(None),
-            }
-        })
+        Catalog::from_folder_with(folder, &[])
+    }
+
+    /// The same, with mods already read.
+    pub fn from_folder_with(folder: &Path, mods: &[ModFiles]) -> Result<Catalog> {
+        Catalog::build_with(
+            |name| {
+                let path = folder.join(name);
+                match path.is_file() {
+                    true => Ok(Some(std::fs::read(&path)?)),
+                    false => Ok(None),
+                }
+            },
+            mods,
+        )
     }
 
     /// One of each item players can tell apart, by name: what to offer when adding items.

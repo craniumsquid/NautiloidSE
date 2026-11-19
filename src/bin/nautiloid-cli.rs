@@ -33,7 +33,7 @@ A <save> is a .lsv file or the save folder that holds one.
   party <save>
       The party as the entity data has it: level, experience, ability scores, gold and
       Inspiration.
-  items <save> [--game FOLDER]
+  items <save> [--game FOLDER [--mods FOLDER [--settings FILE]]]
       What each character and the camp chest hold, with the amount of each stack and the
       camp supplies food is worth. With the game's files, the names players see.
   add <save> <folder> <name> <holder> <item>[*N]... --game FOLDER
@@ -103,6 +103,7 @@ A <save> is a .lsv file or the save folder that holds one.
       folder, its version, parts and file count, and the root templates, item stats and
       language files in it. Reads only each package's header and file list.
   catalog <game Data folder | folder from catalog-files> [--find TEXT] [--limit N]
+          [--mods FOLDER [--settings FILE]]   with the active mods (settings default: FOLDER/modsettings.lsx)
       The game's items with their English names, read from the game's own files.
   catalog-files <game Data folder> <out folder>
       Copy out of the game's packages the files an item catalog is built from: every root
@@ -216,7 +217,7 @@ fn run(raw: &[String]) -> Result<()> {
             )?,
             out,
         ),
-        "items" => items(&Args::parse(rest, &[], &["game"])?, out),
+        "items" => items(&Args::parse(rest, &[], &["game", "mods", "settings"])?, out),
         "owners" => owners(&Args::parse(rest, &[], &[])?, out),
         "story" => story(
             &Args::parse(rest, &["flags"], &["db", "find", "limit"])?,
@@ -246,7 +247,7 @@ fn run(raw: &[String]) -> Result<()> {
             }
             Ok(())
         }
-        "add" => add(&Args::parse(rest, &[], &["game"])?, out),
+        "add" => add(&Args::parse(rest, &[], &["game", "mods", "settings"])?, out),
         "donors" => donors(&Args::parse(rest, &["tables"], &["game", "kind"])?, out),
         "tables" => tables(&Args::parse(rest, &[], &[])?, out),
         "rows" => rows(&Args::parse(rest, &[], &["limit"])?, out),
@@ -262,7 +263,10 @@ fn run(raw: &[String]) -> Result<()> {
         ),
         "survey" => survey(&Args::parse(rest, &[], &[])?, out),
         "catalog-files" => catalog_files(&Args::parse(rest, &[], &[])?, out),
-        "catalog" => catalog(&Args::parse(rest, &[], &["find", "limit"])?, out),
+        "catalog" => catalog(
+            &Args::parse(rest, &[], &["find", "limit", "mods", "settings"])?,
+            out,
+        ),
         "rewrite" => rewrite(&Args::parse(rest, &["reencode"], &[])?, out),
         "help" | "--help" | "-h" => {
             write!(out, "{USAGE}")?;
@@ -918,13 +922,7 @@ fn items(args: &Args, out: &mut impl Write) -> Result<()> {
     let save = Save::open(Path::new(&args.positional[0]))?;
     // With the game's files, the names players see.
     let catalog = match args.get("game") {
-        Some(folder) => {
-            let folder = Path::new(folder);
-            Some(match folder.join("Shared.pak").is_file() {
-                true => nautiloid_save_editor::catalog::Catalog::from_game(folder)?,
-                false => nautiloid_save_editor::catalog::Catalog::from_folder(folder)?,
-            })
-        }
+        Some(folder) => Some(open_catalog(Path::new(folder), args)?),
         None => None,
     };
     let globals = save.lsf(save::GLOBALS)?;
@@ -982,10 +980,7 @@ fn add(args: &Args, out: &mut impl Write) -> Result<()> {
         args.get("game")
             .ok_or_else(|| anyhow!("add needs --game"))?,
     );
-    let catalog = match folder.join("Shared.pak").is_file() {
-        true => nautiloid_save_editor::catalog::Catalog::from_game(folder)?,
-        false => nautiloid_save_editor::catalog::Catalog::from_folder(folder)?,
-    };
+    let catalog = open_catalog(folder, args)?;
     let mut session = Session::open(Path::new(&args.positional[0]))?;
     session.set_catalog(std::sync::Arc::new(catalog));
     let holder = match args.positional[3].as_str() {
@@ -1673,18 +1668,51 @@ fn packages_under(root: &Path) -> Result<Vec<std::path::PathBuf>> {
     Ok(paks)
 }
 
+/// The item catalog from a game `Data` folder or a folder from `catalog-files`, with the mods
+/// `--mods FOLDER` holds that `--settings FILE` (a `modsettings.lsx`) lists, when given.
+fn open_catalog(folder: &Path, args: &Args) -> Result<nautiloid_save_editor::catalog::Catalog> {
+    use nautiloid_save_editor::catalog::Catalog;
+    use nautiloid_save_editor::modfiles::{self, ModSetup};
+    let mods = match (args.get("mods"), args.get("settings")) {
+        (None, None) => Vec::new(),
+        (Some(mods), settings) => {
+            let mods = Path::new(mods);
+            let settings = match settings {
+                Some(path) => Path::new(path).to_path_buf(),
+                None => mods.join("modsettings.lsx"),
+            };
+            let loaded = modfiles::read(&ModSetup {
+                folder: mods.to_path_buf(),
+                settings,
+            })?;
+            for missing in &loaded.missing {
+                eprintln!("active mod not in the Mods folder: {missing}");
+            }
+            loaded.mods
+        }
+        (None, Some(_)) => bail!("--settings needs --mods"),
+    };
+    match folder.join("Shared.pak").is_file() {
+        true => Catalog::from_game_with(folder, &mods),
+        false => Catalog::from_folder_with(folder, &mods),
+    }
+}
+
 fn catalog(args: &Args, out: &mut impl Write) -> Result<()> {
     use nautiloid_save_editor::catalog::Catalog;
     args.expect(
         1,
-        "catalog <game Data folder | folder from catalog-files> [--find TEXT]",
+        "catalog <game Data folder | folder from catalog-files> [--find TEXT] [--mods FOLDER [--settings FILE]]",
     )?;
     let folder = Path::new(&args.positional[0]);
     let started = std::time::Instant::now();
-    let catalog = match folder.join("Shared.pak").is_file() {
-        true => Catalog::from_game(folder)?,
-        false => Catalog::from_folder(folder)?,
-    };
+    let catalog: Catalog = open_catalog(folder, args)?;
+    if !catalog.mods.is_empty() {
+        writeln!(out, "mods read: {}", catalog.mods.join(", "))?;
+    }
+    for problem in &catalog.mod_problems {
+        writeln!(out, "mod problem: {problem}")?;
+    }
     let named = catalog
         .items
         .iter()

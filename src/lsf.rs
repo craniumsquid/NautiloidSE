@@ -162,9 +162,10 @@ impl Sections {
             metadata_format: u32_at(data, 60),
         };
         // Saves write 0. The game's own data files write 2, with the same layout as far as
-        // this reader goes: it reads them and checks every record as it would a save's.
+        // this reader goes: it reads them and checks every record as it would a save's. Mods
+        // often write 1, whose records [`Lsf::from_sections`] converts.
         ensure!(
-            header.metadata_format == 0 || header.metadata_format == 2,
+            header.metadata_format <= 2,
             "LSF metadata format {} is not supported",
             header.metadata_format
         );
@@ -330,13 +331,88 @@ pub struct Lsf {
     index: Index,
 }
 
+/// Metadata format 1, which tools that build mods write: a node is 16 bytes (name, parent,
+/// next sibling, first attribute) and an attribute is 16 (name, type and length, the next
+/// attribute of the same node or -1, offset into the values).
+const METADATA_ADJACENCY: u32 = 1;
+
+/// Rewrites format-1 records as the 12-byte ones saves use, with the values in attribute
+/// order, so that the rest reads and checks them as it does a save's. The document then
+/// says format 0, and writes out as one.
+fn from_adjacency(sections: &mut Sections) -> Result<()> {
+    ensure!(
+        sections.nodes.len().is_multiple_of(16),
+        "nodes section has a partial entry"
+    );
+    ensure!(
+        sections.attributes.len().is_multiple_of(16),
+        "attributes section has a partial entry"
+    );
+    let attr_count = sections.attributes.len() / 16;
+    let attr = |i: usize| &sections.attributes[i * 16..i * 16 + 16];
+    // Which node each attribute belongs to, by following each node's chain.
+    let mut owner = vec![-1i32; attr_count];
+    for (n, raw) in sections.nodes.chunks_exact(16).enumerate() {
+        let mut next = i32_at(raw, 12);
+        let mut steps = 0;
+        while next >= 0 {
+            let i = next as usize;
+            ensure!(
+                i < attr_count,
+                "node {n} points at an attribute that doesn't exist"
+            );
+            ensure!(owner[i] == -1, "attribute {i} is in two nodes' lists");
+            owner[i] = n as i32;
+            next = i32_at(attr(i), 8);
+            steps += 1;
+            ensure!(
+                steps <= attr_count,
+                "node {n}'s attributes go round in a loop"
+            );
+        }
+    }
+    let mut nodes = Vec::with_capacity(sections.nodes.len() / 16 * 12);
+    for (n, raw) in sections.nodes.chunks_exact(16).enumerate() {
+        let first = owner
+            .iter()
+            .position(|&o| o == n as i32)
+            .map_or(-1, |i| i as i32);
+        nodes.extend_from_slice(&raw[0..4]);
+        nodes.extend_from_slice(&first.to_le_bytes());
+        nodes.extend_from_slice(&raw[4..8]);
+    }
+    let mut attributes = Vec::with_capacity(attr_count * 12);
+    let mut values = Vec::with_capacity(sections.values.len());
+    for (i, &node) in owner.iter().enumerate() {
+        let raw = attr(i);
+        ensure!(node >= 0, "attribute {i} belongs to no node");
+        let len = (u32_at(raw, 4) >> 6) as usize;
+        let offset = u32_at(raw, 12) as usize;
+        ensure!(
+            offset + len <= sections.values.len(),
+            "attribute {i} runs past the values section"
+        );
+        values.extend_from_slice(&sections.values[offset..offset + len]);
+        attributes.extend_from_slice(&raw[0..8]);
+        attributes.extend_from_slice(&node.to_le_bytes());
+    }
+    sections.nodes = nodes;
+    sections.attributes = attributes;
+    sections.values = values;
+    sections.header.metadata_format = 0;
+    Ok(())
+}
+
 impl Lsf {
     /// Parses an `.lsf` file.
     pub fn parse(data: &[u8]) -> Result<Lsf> {
         Lsf::from_sections(Sections::read(data)?)
     }
 
-    pub fn from_sections(sections: Sections) -> Result<Lsf> {
+    pub fn from_sections(mut sections: Sections) -> Result<Lsf> {
+        if sections.header.metadata_format == METADATA_ADJACENCY {
+            from_adjacency(&mut sections)?;
+        }
         let names = parse_names(&sections.strings)?;
         let name_ref = |raw: u32| -> Result<NameRef> {
             let bucket = (raw >> 16) as usize;
@@ -988,6 +1064,96 @@ mod tests {
     use super::build::Node;
     use super::*;
     use crate::value::DataType;
+
+    /// Rewrites a document's records in metadata format 1, as mod tools write them, with
+    /// each node's attributes chained last to first and the values in that order.
+    fn to_adjacency(sections: &mut Sections) {
+        let attrs: Vec<&[u8]> = sections.attributes.chunks_exact(12).collect();
+        let node_count = sections.nodes.len() / 12;
+        let mut by_node: Vec<Vec<usize>> = vec![Vec::new(); node_count];
+        for (i, raw) in attrs.iter().enumerate() {
+            by_node[i32_at(raw, 8) as usize].push(i);
+        }
+        // Values back to front, so that offsets aren't in attribute order.
+        let mut offsets = vec![0u32; attrs.len()];
+        let mut starts = Vec::new();
+        let mut at = 0usize;
+        for raw in &attrs {
+            starts.push(at);
+            at += (u32_at(raw, 4) >> 6) as usize;
+        }
+        let mut values = Vec::new();
+        for i in (0..attrs.len()).rev() {
+            let len = (u32_at(attrs[i], 4) >> 6) as usize;
+            offsets[i] = values.len() as u32;
+            values.extend_from_slice(&sections.values[starts[i]..starts[i] + len]);
+        }
+        let mut next = vec![-1i32; attrs.len()];
+        let mut first = vec![-1i32; node_count];
+        for (n, list) in by_node.iter().enumerate() {
+            // The chain runs last to first.
+            for pair in list.windows(2) {
+                next[pair[1]] = pair[0] as i32;
+            }
+            first[n] = list.last().map_or(-1, |&i| i as i32);
+        }
+        let mut new_attrs = Vec::new();
+        for (i, raw) in attrs.iter().enumerate() {
+            new_attrs.extend_from_slice(&raw[0..8]);
+            new_attrs.extend_from_slice(&next[i].to_le_bytes());
+            new_attrs.extend_from_slice(&offsets[i].to_le_bytes());
+        }
+        let mut nodes = Vec::new();
+        for (n, raw) in sections.nodes.chunks_exact(12).enumerate() {
+            nodes.extend_from_slice(&raw[0..4]);
+            nodes.extend_from_slice(&raw[8..12]);
+            nodes.extend_from_slice(&(-1i32).to_le_bytes());
+            nodes.extend_from_slice(&first[n].to_le_bytes());
+        }
+        sections.nodes = nodes;
+        sections.attributes = new_attrs;
+        sections.values = values;
+        sections.header.metadata_format = METADATA_ADJACENCY;
+    }
+
+    #[test]
+    fn reads_the_format_mod_tools_write() {
+        let mut sections = Sections::read(&sample()).unwrap();
+        to_adjacency(&mut sections);
+        let doc = Lsf::from_sections(sections).unwrap();
+        let meta = doc.root("MetaData").unwrap();
+        assert_eq!(doc.get(meta, "Difficulty"), Some(Value::UInt(2)));
+        assert_eq!(
+            doc.get(meta, "LeaderName").unwrap().as_str(),
+            Some("Nelthryiis")
+        );
+        let list = doc
+            .find(&["MetaData", "MetaData", "ModuleSettings", "Mods"])
+            .or_else(|| doc.find(&["MetaData", "ModuleSettings", "Mods"]))
+            .unwrap();
+        let folders: Vec<String> = doc
+            .children_named(list, "ModuleShortDesc")
+            .map(|n| doc.get(n, "Folder").unwrap().as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(folders, ["GustavX", "Honour"]);
+        let versions: Vec<_> = doc
+            .children_named(list, "ModuleShortDesc")
+            .map(|n| doc.get(n, "Version64"))
+            .collect();
+        assert_eq!(
+            versions,
+            [Some(Value::Int64(1 << 40)), Some(Value::Int64(7))]
+        );
+        assert!(doc.root("Empty").is_some());
+
+        // A chain that loops is refused, not followed for ever.
+        let mut sections = Sections::read(&sample()).unwrap();
+        to_adjacency(&mut sections);
+        let first = i32_at(&sections.nodes, 12) as usize;
+        sections.attributes[first * 16 + 8..first * 16 + 12]
+            .copy_from_slice(&(first as i32).to_le_bytes());
+        assert!(Lsf::from_sections(sections).is_err());
+    }
 
     fn sample() -> Vec<u8> {
         let mods = Node::new("Mods")

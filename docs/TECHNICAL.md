@@ -218,7 +218,8 @@ item factory that is in an inventory and isn't a container (`items::donors`). It
 Only an item made from one of the game's own templates (`TemplateType` 0 in its creator) can
 be made into another.
 
-An item the catalog doesn't list, which in practice is a mod's, can still be added as a
+An item the catalog doesn't list, a mod's when the mods couldn't be read (the saves folder
+isn't the game's own, say), can still be added as a
 plain copy (`Session::addable`): the save gives its game name and template, the copy keeps
 every record of the original, and nothing has to be known about it. `pattern_for` then takes
 only a donor with the same game name. It stacks if the save has a stack of it, up to the
@@ -345,9 +346,25 @@ templates whose names start with `%%%`, which the game doesn't use. `CanBePicked
 from the templates like the rest: all 45,398 items carried in the sample saves have it, and
 an item without it, such as the Bag of Rotten Food that's thrown in a fight, shows as a blank
 slot in an inventory. Where several templates share a game name, one that can be picked up
-is preferred. Items added by mods aren't in it: their
-templates and text are in the mods' own packages, which the editor doesn't read yet. One the
-save has can still be copied (see Choosing the donor).
+is preferred.
+
+### Mods
+
+When the saves folder is the game's own (`<profile>/Savegames/Story`), `modfiles.rs` finds
+the profile's `modsettings.lsx` and the `Mods` folder beside `PlayerProfiles`
+(`ModSetup::for_saves`). It lists each package there and reads its `Mods/<folder>/meta.lsx`
+to learn which mod it is, then for each active mod in load order peeks out its templates,
+stats files and English text (see the format notes). `Catalog::build_with` reads them after
+the game's: a later mod's template, stats entry or text replaces an earlier one's, and stats
+entries declared again are added to. `.lsx` documents go through `xml.rs`, a small reader for
+what these tools write, and `lsx.rs`, which turns one into the same `Lsf` saves use; `.lsf`
+files in metadata format 1 are rewritten into the save layout as they are parsed. An item
+records the mod its template is from, and the add dialog says so, warning when the save's own
+mod list lacks it. A mod file that can't be read is passed over and noted
+(`Catalog::mod_problems`); mods that can't be read at all leave the game's items. All 65
+active mods in the test set read without a problem, adding 2,448 items to offer. The game is
+read again when the saves folder changes, as another profile has other mods. The command-line
+tool's `catalog`, `items` and `add` take `--mods FOLDER [--settings FILE]`.
 
 ## The story state (read only)
 

@@ -687,3 +687,82 @@ fn shows_save_info_and_fits_a_small_window() {
     ui.snapshot("10-browser-small-window");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn offers_the_items_of_the_active_mods() {
+    use nautiloid_save_editor::catalog::build::{game_folder_with, template, GameItem};
+    use nautiloid_save_editor::catalog::Kind;
+    use nautiloid_save_editor::lsf::build::{lsf, Node};
+    use nautiloid_save_editor::modfiles::build::{loca_xml, meta, settings};
+    let root = temp_dir("mod-items");
+    // The game's own folders: a profile's saves and mod list, and the Mods folder.
+    let larian = root.join("Larian Studios").join("Baldur's Gate 3");
+    let profile = larian.join("PlayerProfiles").join("Public");
+    let story = profile.join("Savegames").join("Story");
+    std::fs::create_dir_all(&story).unwrap();
+    sample_saves(&story);
+    let data = game_folder_with(
+        &root.join("Baldurs Gate 3"),
+        &[GameItem {
+            template: "00000000-0000-0000-0000-00000000cccc",
+            stats: "OBJ_Rope",
+            display: "Rope",
+            kind: Kind::Object,
+            category: "Tool",
+            max_stack: 1,
+        }],
+    )
+    .unwrap();
+    const PACK: &str = "c6c0d2bd-6198-de9e-30ad-e8cda1793025";
+    std::fs::write(
+        profile.join("modsettings.lsx"),
+        settings(&[(PACK, "Pack", "Test Pack")]),
+    )
+    .unwrap();
+    let templates = lsf(&[Node::new("Templates").child(template(
+        "c304469f-6132-4304-a5a2-882a2820be3b",
+        "AMP_FeyCoin",
+        &[
+            ("Type", "item"),
+            ("Stats", "AMP_FeyCoin"),
+            ("DisplayName", "hfey"),
+            ("ParentTemplateId", "00000000-0000-0000-0000-00000000cccc"),
+        ],
+    ))])
+    .unwrap();
+    let stats = "new entry \"AMP_FeyCoin\"\ntype \"Object\"\nusing \"OBJ_Rope\"\n";
+    let text = loca_xml(&[("hfey", "Fey Coin")]);
+    let meta = meta(PACK, "Pack", "Test Pack");
+    let pak = nautiloid_save_editor::lspk::build(&[
+        ("Mods/Pack/meta.lsx", meta.as_bytes()),
+        ("Public/Pack/RootTemplates/coin.lsf", &templates),
+        (
+            "Public/Pack/Stats/Generated/Data/Items.txt",
+            stats.as_bytes(),
+        ),
+        (
+            "Mods/Pack/Localization/English/pack.loca.xml",
+            text.as_bytes(),
+        ),
+    ])
+    .unwrap();
+    std::fs::create_dir_all(larian.join("Mods")).unwrap();
+    std::fs::write(larian.join("Mods").join("Pack.pak"), pak).unwrap();
+
+    let mut ui = Harness::with_game(Some(story), Some(data), WINDOW);
+    ui.click("Shattered Sanctum - 8h 02m");
+    ui.click("Inventory");
+    ui.click("Add items to Tav…");
+    assert!(ui.sees("search the game's 2 items"));
+    ui.type_text("fey");
+    assert!(ui.sees("Fey Coin"));
+    assert!(ui.sees("Object · Tool · AMP_FeyCoin · from Test Pack"));
+    // The sample save was made without the mod.
+    assert!(ui.sees("This save doesn't list Test Pack"));
+    ui.snapshot("16d-mod-items");
+    ui.click("Add");
+    assert!(ui.sees("1 added"));
+    let change = ui.app.session().unwrap().changes().pop().unwrap();
+    assert_eq!(change.what, "Add Fey Coin");
+    std::fs::remove_dir_all(&root).unwrap();
+}

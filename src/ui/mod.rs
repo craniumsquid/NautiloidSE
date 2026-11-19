@@ -20,6 +20,7 @@ pub mod thumbs;
 pub mod toast;
 pub mod widgets;
 
+use crate::modfiles::ModSetup;
 use crate::party::Holder;
 use crate::saves::{self, Dropped};
 use crate::session::{Field, Session};
@@ -205,8 +206,9 @@ impl EditorApp {
             None if options.detect => crate::catalog::detect_game(),
             None => None,
         };
+        let mods = dir.as_deref().and_then(ModSetup::for_saves);
         let game = match game_dir {
-            Some(dir) => game::GameFiles::start(dir),
+            Some(game_dir) => game::GameFiles::start(game_dir, mods),
             None => game::GameFiles::Missing,
         };
         let mut app = EditorApp {
@@ -638,6 +640,16 @@ impl EditorApp {
         }
     }
 
+    /// Where the mods are for the saves folder in use, if it is one of the game's own.
+    fn mod_setup(&self) -> Option<ModSetup> {
+        self.browser.dir.as_deref().and_then(ModSetup::for_saves)
+    }
+
+    /// Starts reading the game's files in its `Data` folder, with the active mods.
+    fn start_game(&mut self, data: PathBuf) {
+        self.game = game::GameFiles::start(data, self.mod_setup());
+    }
+
     fn apply(&mut self, ctx: &Context, action: Action, time: f64) {
         match action {
             Action::Open(folder) => {
@@ -659,7 +671,7 @@ impl EditorApp {
                 );
                 if let Some(picked) = picked {
                     match game::data_folder(&picked) {
-                        Some(data) => self.game = game::GameFiles::start(data),
+                        Some(data) => self.start_game(data),
                         None => self.toasts.push(Toast::new(
                             "That folder doesn't hold the game's files. Choose the Baldurs \
                              Gate 3 folder, or the Data folder inside it.",
@@ -697,7 +709,7 @@ impl EditorApp {
                         FolderFor::Game => match game::data_folder(&path) {
                             Some(data) => {
                                 self.dialog = None;
-                                self.game = game::GameFiles::start(data);
+                                self.start_game(data);
                                 None
                             }
                             None => Some(
@@ -730,6 +742,14 @@ impl EditorApp {
                 _ => {
                     self.browser.set_dir(dir);
                     self.thumbs.clear();
+                    // Another saves folder may be another profile, with other mods.
+                    let mods = self.mod_setup();
+                    if let Some((data, before)) = self.game.source() {
+                        if before != mods.as_ref() {
+                            let data = data.to_path_buf();
+                            self.start_game(data);
+                        }
+                    }
                 }
             },
             Action::SelectCampaign(id) => self.browser.selected = Some(id),

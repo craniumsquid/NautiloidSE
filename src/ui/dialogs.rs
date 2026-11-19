@@ -299,7 +299,7 @@ fn add_item(
     title(ui, &format!("Add items for {who}"));
     ui.label(
         egui::RichText::new(
-            "Pick any of the game's items. Each new one is a copy of the closest item in \
+            "Pick any of the game's items, or your active mods'. Each new one is a copy of the closest item in \
              this save (the same item, if anyone has one), made into the item you pick. An \
              item that stacks is added as one stack.",
         )
@@ -410,6 +410,19 @@ pub fn found_item(
         about.push(item.rarity.clone());
     }
     about.push(item.stats.clone());
+    if !item.module.is_empty() {
+        about.push(format!("from {}", item.module));
+    }
+    // A mod's item is only there while the mod is: in a save made without it, the game
+    // shows a blank slot.
+    let unlisted = (!item.module_id.is_empty()
+        && !session.mods().iter().any(|m| m.uuid == item.module_id))
+    .then(|| {
+        format!(
+            "This save doesn't list {}, so the item may show as a blank slot.",
+            item.module
+        )
+    });
     let pattern = session.pattern_for(holder, item);
     let story = item.story.then_some(
         "A story item: the game's quests may count on there being only the one, so a second \
@@ -433,6 +446,16 @@ pub fn found_item(
                         egui::RichText::new(story)
                             .font(theme::body(12.0))
                             .color(theme::ACCENT),
+                    )
+                    .wrap(),
+                );
+            }
+            if let (Some(unlisted), Ok(_)) = (&unlisted, &pattern) {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(unlisted)
+                            .font(theme::body(12.0))
+                            .color(theme::CORAL),
                     )
                     .wrap(),
                 );

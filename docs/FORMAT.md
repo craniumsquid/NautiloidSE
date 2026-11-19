@@ -352,15 +352,46 @@ command, which reads only each package's header and file list):
   items), `Stats`, `DisplayName` and `Description` (handles), `Icon`, and
   `ParentTemplateId`, whose values fill in any the template leaves out. About 9,300 are
   items, 9,100 of them with an English name. `StoryItem` (a Bool, also inherited) marks the
-  items quests count on; 24 of the 2,700 items the editor offers for adding have it.
+  items quests count on; 26 of the 2,573 items the editor offers for adding have it.
 - The stats files are text: `new entry "NAME"`, `type`, `using "PARENT"` (filling in what
   the entry leaves out) and `data "Key" "Value"`, including `RootTemplate`, `Rarity` and
   `ObjectCategory`. Several templates can share one entry; its `RootTemplate` is the main one.
 - The language file is `LOCA`, the number of entries, where the texts start, then per entry
   a 64-byte handle, a u16 version and a u32 length, then the texts in order, each ending in
   a NUL.
-- Items added by mods are named in the mods' own packages, which the editor does not read
-  yet: in the samples, dyes, outfits and a few scrolls.
+- A stats entry declared a second time is added to, not replaced: the game's later modules,
+  and mods, change one value of an entry by declaring it again, often `using` itself, with
+  that value alone. Read that way, 97 more of the game's items have their rarity and slot
+  (Ambusher is a Rare shortsword).
+- An entry's main template is its own `RootTemplate`. One it only has from the entry it
+  uses belongs to that entry, so a template that names the entry in its `Stats` comes first:
+  without that, 25 of the game's items (Transmuter's Stones, the Moonblade, Spider's Lyre)
+  and every mod item made from a game one went by their parent's template.
+
+## Mods' packages
+
+Mods are `.pak` files in the `Mods` folder beside `PlayerProfiles`, the same LSPK version 18
+packages as the game's. Read from 66 real mods:
+
+- **Which are active, in what order**: the profile's `modsettings.lsx`
+  (`PlayerProfiles/<profile>/modsettings.lsx`), an `.lsx` document listing
+  `ModuleShortDesc` nodes (`UUID`, `Folder`, `Name`) in load order. The game's own modules
+  are listed too, and have no package there.
+- **Which package is which mod**: each package holds `Mods/<folder>/meta.lsx`, whose
+  `ModuleInfo` node gives the mod's `UUID`, `Folder` and `Name`. Package file names mean
+  nothing.
+- **Templates**: one file per template, or a `_merged.lsf`, under
+  `Public/<folder>/RootTemplates/`, as `.lsf` or `.lsx` (XML: `<region>`, `<node id>`,
+  `<attribute id type value>`, `handle` and `version` for translated text). Most mods'
+  `.lsf` files say metadata format 1: a node is 16 bytes (name, parent, next sibling, first
+  attribute) and an attribute 16 (name, type and length, the node's next attribute or -1,
+  offset into the values). Mods' templates often fill themselves in from the game's.
+- **Stats**: any `.txt` under `Public/<folder>/Stats/Generated/Data/`, with names of their
+  own and every kind of entry mixed; an entry's `type` line says which.
+- **English text**: under `Localization/English/` (in `Mods/<folder>/` or at the root), as
+  `.loca` like the game's or as XML, `<content contentuid="handle" version="1">text</content>`.
+- A mod may use another's: Ancient Mega Pack's Fey Coin is a template in two mods and a stats
+  entry and text in a third, so they are read together, in load order, after the game's.
 
 ## Tried in the game
 

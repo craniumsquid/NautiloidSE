@@ -202,3 +202,42 @@ fn items_can_be_added_to_the_saves() {
     std::fs::remove_dir_all(&out).unwrap();
     assert!(tried > 0, "no save had items to add");
 }
+
+/// With `NAUTILOID_MODS` set to a folder of mod packages that holds a `modsettings.lsx` too,
+/// every active mod reads without trouble, and the items they add have names.
+#[test]
+fn the_active_mods_read_cleanly() {
+    use nautiloid_save_editor::modfiles::{self, ModSetup};
+    let (Some(game), Some(mods)) = (
+        std::env::var_os("NAUTILOID_GAME_FILES"),
+        std::env::var_os("NAUTILOID_MODS"),
+    ) else {
+        return;
+    };
+    let (game, mods) = (PathBuf::from(game), PathBuf::from(mods));
+    let setup = ModSetup {
+        settings: mods.join("modsettings.lsx"),
+        folder: mods,
+    };
+    let loaded = modfiles::read(&setup).unwrap();
+    assert!(loaded.missing.is_empty(), "missing: {:?}", loaded.missing);
+    let catalog = match game.join("Shared.pak").is_file() {
+        true => Catalog::from_game_with(&game, &loaded.mods).unwrap(),
+        false => Catalog::from_folder_with(&game, &loaded.mods).unwrap(),
+    };
+    assert!(
+        catalog.mod_problems.is_empty(),
+        "{:#?}",
+        catalog.mod_problems
+    );
+    let from_mods: Vec<_> = catalog.listed().filter(|i| !i.module.is_empty()).collect();
+    eprintln!(
+        "{} mods, {} of their items offered",
+        catalog.mods.len(),
+        from_mods.len()
+    );
+    if let Some(fey) = catalog.by_stats("AMP_FeyCoin") {
+        assert_eq!(fey.display, "Fey Coin");
+        assert_eq!(fey.kind, Kind::Object);
+    }
+}

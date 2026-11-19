@@ -394,6 +394,8 @@ impl Session {
             // holds nothing, as every donor is.
             container: false,
             pickable: true,
+            module: String::new(),
+            module_id: String::new(),
         })
     }
 

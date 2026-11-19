@@ -161,10 +161,14 @@ A few things to know:
   can be added. Like the game's own, they show a weight of 0.
 - An item marked as a **story item** shows a warning. Quests sometimes expect there to be only
   one of these, so a second one may confuse them.
-- Items that come from **mods** show a rough name made from their internal name, instead of
-  their proper name, and can't be found under **Add items…**. If someone already carries
-  one, the **+** beside it adds copies of it. Keep the mod active: like the original, a copy
-  needs it.
+- Items that come from **mods** have their proper names, and can be found under **Add
+  items…** along with the game's own, marked with the mod they come from. The app reads the
+  mods your game has turned on, from the `Mods` folder next to your saves, whenever your
+  saves folder is the game's own. An item from a mod the save wasn't made with shows a
+  warning: the game shows it as a blank slot unless that mod is active. Keep the mod active
+  when you play: an item from a mod needs it, like any other.
+- If your saves folder is somewhere else, mods' items keep a rough name made from their
+  internal name, and can only be copied: the **+** beside one someone carries adds more.
 
 ## 6. Change approval
 

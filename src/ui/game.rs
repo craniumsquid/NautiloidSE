@@ -3,6 +3,7 @@
 use super::widgets::{self, Kind};
 use super::{theme, Action, FolderFor};
 use crate::catalog::Catalog;
+use crate::modfiles::ModSetup;
 use eframe::egui::{self, Ui};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
@@ -14,31 +15,59 @@ pub enum GameFiles {
     Missing,
     Loading {
         folder: PathBuf,
+        mods: Option<ModSetup>,
         result: Receiver<Result<Catalog, String>>,
     },
     Ready {
+        folder: PathBuf,
+        mods: Option<ModSetup>,
         catalog: Arc<Catalog>,
     },
     Failed {
         folder: PathBuf,
+        mods: Option<ModSetup>,
         error: String,
     },
 }
 
 impl GameFiles {
-    /// Starts reading the game's files in `folder` (its `Data` folder) on another thread.
-    pub fn start(folder: PathBuf) -> GameFiles {
+    /// Starts reading the game's files in `folder` (its `Data` folder), and the active mods'
+    /// when `mods` says where they are, on another thread.
+    pub fn start(folder: PathBuf, mods: Option<ModSetup>) -> GameFiles {
         let (send, result) = channel();
-        let from = folder.clone();
+        let (from, with) = (folder.clone(), mods.clone());
         std::thread::spawn(move || {
-            let _ = send.send(Catalog::from_game(&from).map_err(|e| format!("{e:#}")));
+            let catalog = match &with {
+                Some(with) => Catalog::from_game_and_mods(&from, with),
+                None => Catalog::from_game(&from),
+            };
+            let _ = send.send(catalog.map_err(|e| format!("{e:#}")));
         });
-        GameFiles::Loading { folder, result }
+        GameFiles::Loading {
+            folder,
+            mods,
+            result,
+        }
+    }
+
+    /// The game folder and mods it reads, or read.
+    pub fn source(&self) -> Option<(&Path, Option<&ModSetup>)> {
+        match self {
+            GameFiles::Missing => None,
+            GameFiles::Loading { folder, mods, .. }
+            | GameFiles::Ready { folder, mods, .. }
+            | GameFiles::Failed { folder, mods, .. } => Some((folder, mods.as_ref())),
+        }
     }
 
     /// Takes the result if reading has finished, and returns the catalog if it just arrived.
     pub fn poll(&mut self) -> Option<Arc<Catalog>> {
-        let GameFiles::Loading { folder, result } = self else {
+        let GameFiles::Loading {
+            folder,
+            mods,
+            result,
+        } = self
+        else {
             return None;
         };
         let outcome = match result.try_recv() {
@@ -50,6 +79,8 @@ impl GameFiles {
             Ok(catalog) => {
                 let catalog = Arc::new(catalog);
                 *self = GameFiles::Ready {
+                    folder: folder.clone(),
+                    mods: mods.clone(),
                     catalog: catalog.clone(),
                 };
                 Some(catalog)
@@ -57,6 +88,7 @@ impl GameFiles {
             Err(error) => {
                 *self = GameFiles::Failed {
                     folder: folder.clone(),
+                    mods: mods.clone(),
                     error,
                 };
                 None
@@ -66,7 +98,7 @@ impl GameFiles {
 
     pub fn catalog(&self) -> Option<Arc<Catalog>> {
         match self {
-            GameFiles::Ready { catalog } => Some(catalog.clone()),
+            GameFiles::Ready { catalog, .. } => Some(catalog.clone()),
             _ => None,
         }
     }
@@ -92,7 +124,7 @@ pub fn notice(ui: &mut Ui, game: &GameFiles, actions: &mut Vec<Action>) {
         GameFiles::Missing => "Items go by the game's internal names: the game wasn't found. \
                                Point at its folder for the names players see."
             .to_owned(),
-        GameFiles::Failed { folder, error } => format!(
+        GameFiles::Failed { folder, error, .. } => format!(
             "Items go by the game's internal names: the game's files in {} couldn't be read \
              ({error}).",
             folder.display()
