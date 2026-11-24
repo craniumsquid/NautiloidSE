@@ -246,9 +246,8 @@ belongs to them; in the camp chest it belongs to nobody, as the chest's items do
    sight row gets a new random identifier, and the ownership rows (`OwneeCurrent`,
    `OwneeHistory`) name the new owner.
 6. The donor's creator and item nodes are copied with the new `Entity` and a new creator
-   `UUID`, and the item's wares mark (bit 33 of its `Flags`) is cleared. Each status in the
-   item node's `StatusManager` gets a new `Handle` in its `StatusMeta`, so that no two items
-   share one; nothing else in the save names a status's handle.
+   `UUID`, and the item's wares mark (bit 33 of its `Flags`) is cleared. The copy's
+   `StatusManager` is left empty, as an item with no status has it (see Statuses).
 
 ### Making the copy into another item (`items::make_into`)
 
@@ -256,12 +255,29 @@ The creator's `TemplateID`, the item node's `CurrentTemplate` and `Stats`, and t
 `TemplateComponent` and `GameObjectVisualComponent` rows (the template identifier as text,
 appended) are set to the new item's. The game fills in the rest from the template.
 
-The donor's statuses are taken off: they are the donor's, often from its template's
-`StatusList` (a Fey Coin's `FEY_COIN_VFX`). Kept, they can clash with the status the new
-template brings. A save with an Astral Coin and a Celestial Coin made from a Fey Coin, each
-keeping its `FEY_COIN_VFX` under the Fey Coin's own handle, crashed the game as it loaded;
-all of the mod's coin statuses share one `StackId`, so the new template's status replaces
-the copied one, and that handle was still the Fey Coin's.
+### Statuses
+
+An item node's `StatusManager` holds its statuses, each a `StatusMeta` (`ID` and a 16-byte
+`Handle`) and a `STATUS` with its state. Most on items are effects from the template's
+`StatusList`: a magic ring's `MAG_JEWELRY1_VFX`, a Fey Coin's `FEY_COIN_VFX`. Nothing else in
+the save names a handle. In 1,500 handles from the game's own saves, the first byte (the
+last pair of the first group as text, `…20-`) is always `0x20` and the rest varies; no two
+items share one.
+
+A copy has none of its donor's statuses. Tried in the game:
+
+- Copies keeping the donor's statuses, handles and all (versions before 1.3.1): they load
+  and work, until one of them leaves the game. Combining copied Fey Coins crashed it. An
+  Astral Coin and a Celestial Coin made from a Fey Coin crashed it as the save loaded: the
+  mod's coin statuses share a `StackId`, so the status the new template brings replaces the
+  copied one, whose handle was still the Fey Coin's.
+- Copies keeping them under random new handles (1.3.1): the save hung at 75% as it loaded.
+- Copies with none (1.3.2): the Astral and Celestial Coins load and work.
+
+Every export also repairs what earlier versions left (`items::repair_shared_statuses`): an
+item holding a handle that an item before it in the list holds too loses its statuses. The
+first holder keeps them, as a copy comes after the item it was made from. The Changes panel
+lists the items when a save has any.
 
 ### Stacks
 

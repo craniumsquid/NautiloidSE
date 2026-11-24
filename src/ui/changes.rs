@@ -57,6 +57,7 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
                 .id_salt("changes")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    repairs(ui, session);
                     let mut owner = "";
                     for change in &changes {
                         if change.who != owner {
@@ -104,4 +105,54 @@ pub fn show(ui: &mut Ui, session: &Session, actions: &mut Vec<Action>) {
                 });
         });
     });
+}
+
+/// What every export repairs, when the save needs it: items sharing statuses with another,
+/// as copies made by earlier versions do. It can't be undone, as there's nothing to want back.
+fn repairs(ui: &mut Ui, session: &Session) {
+    let repairs = session.repairs();
+    if repairs.is_empty() {
+        return;
+    }
+    ui.add_space(4.0);
+    widgets::section_title(ui, "Repaired on export");
+    let mut names: Vec<String> = repairs.iter().map(|r| session.repair_name(r)).collect();
+    names.sort();
+    let shown = 6;
+    let mut list = names
+        .iter()
+        .take(shown)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if names.len() > shown {
+        list.push_str(&format!(" and {} more", names.len() - shown));
+    }
+    let count = match repairs.len() {
+        1 => "One item shares".to_owned(),
+        n => format!("{n} items share"),
+    };
+    Frame::none()
+        .fill(theme::PANEL)
+        .stroke(theme::stroke(1.0, theme::LINE))
+        .rounding(Rounding::same(10.0))
+        .inner_margin(Margin::symmetric(12.0, 9.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.label(egui::RichText::new(list).font(theme::semibold(14.5)));
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(format!(
+                        "{count} hidden status records with another item, as copies made by \
+                         versions of this editor before 1.3.2 do. Selling, combining or \
+                         destroying one could crash the game. The export takes them off the \
+                         copies, which may lose a glow or sparkle; nothing else changes."
+                    ))
+                    .font(theme::body(12.5))
+                    .color(theme::MUTED),
+                )
+                .wrap(),
+            );
+        });
 }

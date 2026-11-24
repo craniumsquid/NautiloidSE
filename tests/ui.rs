@@ -766,3 +766,62 @@ fn offers_the_items_of_the_active_mods() {
     assert_eq!(change.what, "Add Fey Coin");
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn repairs_statuses_that_earlier_copies_share() {
+    use nautiloid_save_editor::items;
+    use nautiloid_save_editor::lsf::Lsf;
+    use nautiloid_save_editor::newage::NewAge;
+    use nautiloid_save_editor::party::build::{uuid, ROPE};
+    use nautiloid_save_editor::save::{self, Save};
+    use nautiloid_save_editor::session::Session;
+    let dir = temp_dir("repair");
+    sample_saves(&dir);
+    // A rope copied as versions before 1.3.2 did, with the rope's status and its handle.
+    let folder = dir.join("Tav-1234__Shattered Sanctum - 8h 02m");
+    let mut save = Save::open(&folder).unwrap();
+    let mut globals = save.lsf(save::GLOBALS).unwrap();
+    let mut entities = NewAge::from_lsf(&globals).unwrap();
+    items::copy_item(&mut globals, &mut entities, uuid(ROPE)).unwrap();
+    entities.store(&mut globals).unwrap();
+    let mut globals = Lsf::parse(&globals.write().unwrap()).unwrap();
+    let list = globals.find(&["Items", "ItemFactory", "Items"]).unwrap();
+    let copy = globals.children_named(list, "Item").last().unwrap();
+    let empty = globals.child(copy, "StatusManager").unwrap();
+    assert!(globals.children(empty).is_empty());
+    globals.remove_nodes(&[empty]).unwrap();
+    let list = globals.find(&["Items", "ItemFactory", "Items"]).unwrap();
+    let copy = globals.children_named(list, "Item").last().unwrap();
+    let rope = globals
+        .children_named(list, "Item")
+        .find(|&i| {
+            globals
+                .get(i, "Stats")
+                .and_then(|v| v.as_str().map(str::to_owned))
+                == Some("OBJ_Rope".to_owned())
+        })
+        .unwrap();
+    let manager = globals.child(rope, "StatusManager").unwrap();
+    globals.copy_node(manager, copy).unwrap();
+    save.package
+        .replace(save::GLOBALS, &globals.write().unwrap())
+        .unwrap();
+    std::fs::write(&save.path, save.package.write().unwrap()).unwrap();
+
+    let mut ui = Harness::new(Some(dir.clone()), WINDOW);
+    ui.click("Shattered Sanctum - 8h 02m");
+    let session = ui.app.session().unwrap();
+    assert_eq!(session.repairs().len(), 1);
+    assert!(session.changes().is_empty());
+    assert!(ui.sees("REPAIRED ON EXPORT"));
+    assert!(ui.sees("Rope"), "the copy is named");
+    assert!(ui.sees("One item shares hidden status records with another item"));
+    ui.snapshot("17-repair-on-export");
+    // Nothing else changed, and the export carries the repair.
+    ui.click("Export as a new save…");
+    ui.click("Export");
+    let exported =
+        Session::open(&dir.join("Tav-1234__Shattered Sanctum - 8h 02m - Edited")).unwrap();
+    assert!(exported.repairs().is_empty());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
