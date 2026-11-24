@@ -1279,6 +1279,40 @@ pub fn make_into(
     set(globals, creator, "TemplateID", Value::Uuid(template_id))?;
     set(globals, node, "CurrentTemplate", Value::Uuid(template_id))?;
     set(globals, node, "Stats", Value::Text(stats.to_owned()))?;
+    // The donor's statuses are the donor's: a Fey Coin's sparkle, from its template. Kept,
+    // one can clash with the status the new template brings in the same stack (an Astral
+    // Coin's), and a save with both crashed the game as it loaded.
+    drop_statuses(globals, node)
+}
+
+/// The statuses an item's node holds, under `StatusManager`.
+fn statuses(globals: &Lsf, node: NodeId) -> Vec<NodeId> {
+    globals
+        .children_named(node, "StatusManager")
+        .flat_map(|manager| globals.children(manager).to_vec())
+        .collect()
+}
+
+/// Takes every status off an item's node.
+fn drop_statuses(globals: &mut Lsf, node: NodeId) -> Result<()> {
+    let gone = statuses(globals, node);
+    if gone.is_empty() {
+        return Ok(());
+    }
+    globals.remove_nodes(&gone)
+}
+
+/// Gives each status on an item's node a handle of its own. A copy's statuses are the
+/// donor's, handles and all, and two items must not share one.
+fn fresh_status_handles(globals: &mut Lsf, node: NodeId) -> Result<()> {
+    for status in statuses(globals, node) {
+        if globals.node_name(status) != "StatusMeta" {
+            continue;
+        }
+        if let Some(handle) = globals.attr(status, "Handle") {
+            globals.set_value(handle, &Value::Uuid(new_uuid()))?;
+        }
+    }
     Ok(())
 }
 
@@ -1375,7 +1409,7 @@ fn copy_nodes(globals: &mut Lsf, item: Uuid, copy: Uuid) -> Result<()> {
     if let Some(uuid) = globals.attr(new_creator, "UUID") {
         globals.set_value(uuid, &Value::Uuid(new_uuid()))?;
     }
-    Ok(())
+    fresh_status_handles(globals, new_node)
 }
 
 #[cfg(test)]
@@ -1458,6 +1492,47 @@ mod tests {
         let table = entities.table(name)?;
         let row = entities.row_of(table, index)?;
         Some(u64_of(entities.row(table, row), at))
+    }
+
+    /// The statuses on an item's node, as ID and handle.
+    fn statuses_of(globals: &Lsf, item: Uuid) -> Vec<(String, Option<Uuid>)> {
+        let (_, node) = item_nodes(globals, item).unwrap();
+        statuses(globals, node)
+            .into_iter()
+            .filter(|&s| globals.node_name(s) == "StatusMeta")
+            .map(|s| {
+                let id = globals.get(s, "ID").unwrap().as_str().unwrap().to_owned();
+                (id, globals.get(s, "Handle").and_then(|v| v.as_uuid()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn copies_have_statuses_of_their_own_and_other_items_none() {
+        let mut globals = sample_globals();
+        let mut entities = sample_entities();
+        let donor = statuses_of(&globals, uuid(ROPE));
+        assert_eq!(donor, [("ROPE_VFX".to_owned(), Some(Uuid([0x5a; 16])))]);
+        // The same item keeps the status, under a handle of its own.
+        let same = copy_item(&mut globals, &mut entities, uuid(ROPE)).unwrap();
+        // Another item made from it has none of the rope's.
+        let other = copy_item_to(
+            &mut globals,
+            &mut entities,
+            uuid(ROPE),
+            "00000000-0000-0000-0000-00000000ffff",
+            "OBJ_Rope_Silk",
+        )
+        .unwrap();
+        let (globals, _) = reread(&mut globals, &entities);
+        assert_eq!(statuses_of(&globals, uuid(ROPE)), donor);
+        let copied = statuses_of(&globals, same);
+        assert_eq!(copied.len(), 1);
+        assert_eq!(copied[0].0, "ROPE_VFX");
+        assert!(copied[0].1.is_some() && copied[0].1 != donor[0].1);
+        assert!(statuses_of(&globals, other).is_empty());
+        let (_, node) = item_nodes(&globals, other).unwrap();
+        assert_eq!(globals.children_named(node, "StatusManager").count(), 1);
     }
 
     #[test]

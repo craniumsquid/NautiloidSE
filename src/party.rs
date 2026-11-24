@@ -978,13 +978,31 @@ pub mod build {
                 "OBJ_Rope" => 0x8002_0000_000c,
                 _ => 0x8000_0000_000c,
             };
-            Node::new("Item")
+            let node = Node::new("Item")
                 .attr("Flags", DataType::ULongLong, Value::ULongLong(flags))
                 .attr("Level", DataType::FixedString, Value::Text(String::new()))
                 .attr("CurrentTemplate", DataType::Uuid, Value::Uuid(template))
                 .attr("CurrentTemplateType", DataType::Byte, Value::Byte(0))
                 .attr("Stats", DataType::FixedString, Value::Text(stats.into()))
-                .child(Node::new("ItemMachine"))
+                .child(Node::new("ItemMachine"));
+            // The rope sparkles, as a status its template gives it.
+            let id = |name: &str| Value::Text(name.into());
+            match stats {
+                "OBJ_Rope" => node.child(
+                    Node::new("StatusManager")
+                        .child(
+                            Node::new("StatusMeta")
+                                .attr("ID", DataType::FixedString, id("ROPE_VFX"))
+                                .attr("Handle", DataType::Uuid, Value::Uuid(Uuid([0x5a; 16]))),
+                        )
+                        .child(
+                            Node::new("STATUS")
+                                .attr("ID", DataType::FixedString, id("ROPE_VFX"))
+                                .attr("LifeTime", DataType::Float, Value::Float(-1.0)),
+                        ),
+                ),
+                _ => node,
+            }
         };
         let sample_items = [
             (HERO_GOLD, GOLD_TEMPLATE, "LOOT_Gold_A"),

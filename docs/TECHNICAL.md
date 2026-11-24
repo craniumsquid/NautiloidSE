@@ -246,13 +246,22 @@ belongs to them; in the camp chest it belongs to nobody, as the chest's items do
    sight row gets a new random identifier, and the ownership rows (`OwneeCurrent`,
    `OwneeHistory`) name the new owner.
 6. The donor's creator and item nodes are copied with the new `Entity` and a new creator
-   `UUID`, and the item's wares mark (bit 33 of its `Flags`) is cleared.
+   `UUID`, and the item's wares mark (bit 33 of its `Flags`) is cleared. Each status in the
+   item node's `StatusManager` gets a new `Handle` in its `StatusMeta`, so that no two items
+   share one; nothing else in the save names a status's handle.
 
 ### Making the copy into another item (`items::make_into`)
 
 The creator's `TemplateID`, the item node's `CurrentTemplate` and `Stats`, and the
 `TemplateComponent` and `GameObjectVisualComponent` rows (the template identifier as text,
 appended) are set to the new item's. The game fills in the rest from the template.
+
+The donor's statuses are taken off: they are the donor's, often from its template's
+`StatusList` (a Fey Coin's `FEY_COIN_VFX`). Kept, they can clash with the status the new
+template brings. A save with an Astral Coin and a Celestial Coin made from a Fey Coin, each
+keeping its `FEY_COIN_VFX` under the Fey Coin's own handle, crashed the game as it loaded;
+all of the mod's coin statuses share one `StackId`, so the new template's status replaces
+the copied one, and that handle was still the Fey Coin's.
 
 ### Stacks
 
