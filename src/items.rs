@@ -1279,9 +1279,9 @@ pub fn make_into(
     set(globals, creator, "TemplateID", Value::Uuid(template_id))?;
     set(globals, node, "CurrentTemplate", Value::Uuid(template_id))?;
     set(globals, node, "Stats", Value::Text(stats.to_owned()))?;
-    // A copy has none of the donor's statuses (see `copy_nodes`); this is for one made some
-    // other way. Kept, a Fey Coin's sparkle clashes with the one an Astral Coin's template
-    // brings, in the same stack, and the game crashed loading a save with both.
+    // The donor's statuses are the donor's: a Fey Coin's sparkle, from its template. Kept,
+    // it clashes with the one an Astral Coin's template brings, in the same stack, and the
+    // game crashed loading a save with both.
     drop_statuses(globals, node)
 }
 
@@ -1302,21 +1302,44 @@ fn drop_statuses(globals: &mut Lsf, node: NodeId) -> Result<()> {
     globals.remove_nodes(&gone)
 }
 
-/// An item holding a status whose handle another item holds too, as copies made before
-/// version 1.3.2 did: by the template and game name in its node.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SharedStatus {
-    pub template: String,
-    pub stats: String,
-    /// How many of its statuses share a handle with an item before it.
-    pub statuses: usize,
+/// The first byte of every status handle the game writes, in the 1,500 of the sample saves;
+/// the rest varies. A save whose copies had random handles without it hung as it loaded, and
+/// one whose copies had random handles with it loaded and worked.
+pub const STATUS_HANDLE_TAG: u8 = 0x20;
+
+/// A new status handle, as the game makes them.
+pub fn new_status_handle() -> Uuid {
+    let mut handle = new_uuid();
+    handle.0[0] = STATUS_HANDLE_TAG;
+    handle
 }
 
-/// The `Handle` of each item status whose handle an item before it in the item list holds
-/// too, with that item's node. The game never writes two items with one handle: none of the
-/// saves it made does. Taking either item out of the game, by selling it, combining it or a
-/// script, takes the status away from under the other, and the game crashes.
-fn shared_handles(globals: &Lsf) -> Vec<(NodeId, crate::lsf::AttrId)> {
+/// An item whose statuses an earlier version of the editor left broken, by the template and
+/// game name in its node.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatusRepair {
+    pub template: String,
+    pub stats: String,
+    /// Statuses whose handle an item before it holds too, as copies made before version
+    /// 1.3.1 have. Taking either item out of the game (selling it, combining it) crashes it.
+    /// The repair takes all of this item's statuses off.
+    pub shared: usize,
+    /// Statuses whose handle lacks [`STATUS_HANDLE_TAG`], as copies made by version 1.3.1
+    /// have. The game hangs or crashes loading them. The repair tags them.
+    pub untagged: usize,
+}
+
+/// What is wrong with an item status's handle, if anything.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fault {
+    Shared,
+    Untagged,
+}
+
+/// Each item status with a fault: the item's node, the status's `Handle`, and the fault. A
+/// handle that an item before it holds too is shared; the first to hold it keeps it, as a
+/// copy comes after the item it was made from. The game never writes either fault.
+fn status_faults(globals: &Lsf) -> Vec<(NodeId, crate::lsf::AttrId, Fault)> {
     let Some(items) = globals.find(&["Items", "ItemFactory", "Items"]) else {
         return Vec::new();
     };
@@ -1334,56 +1357,85 @@ fn shared_handles(globals: &Lsf) -> Vec<(NodeId, crate::lsf::AttrId)> {
                 continue;
             };
             if !seen.insert(handle) {
-                out.push((item, attr));
+                out.push((item, attr, Fault::Shared));
+            } else if handle.0[0] != STATUS_HANDLE_TAG {
+                out.push((item, attr, Fault::Untagged));
             }
         }
     }
     out
 }
 
-/// The items whose statuses share a handle with an item before them, which
-/// [`repair_shared_statuses`] takes them off.
-pub fn shared_statuses(globals: &Lsf) -> Vec<SharedStatus> {
-    let mut out: Vec<(NodeId, SharedStatus)> = Vec::new();
-    for (item, _) in shared_handles(globals) {
-        match out.last_mut() {
-            Some((last, shared)) if *last == item => shared.statuses += 1,
-            _ => {
-                let text = |name: &str| match globals.get(item, name) {
-                    Some(Value::Uuid(id)) => id.to_string(),
-                    Some(value) => value.as_str().unwrap_or_default().to_owned(),
-                    None => String::new(),
-                };
-                out.push((
-                    item,
-                    SharedStatus {
-                        template: text("CurrentTemplate"),
-                        stats: text("Stats"),
-                        statuses: 1,
-                    },
-                ));
+/// The items whose statuses [`repair_statuses`] repairs, in the item list's order.
+pub fn status_repairs(globals: &Lsf) -> Vec<StatusRepair> {
+    let mut out: Vec<(NodeId, StatusRepair)> = Vec::new();
+    for (item, _, fault) in status_faults(globals) {
+        if out.last().is_none_or(|(last, _)| *last != item) {
+            let text = |name: &str| match globals.get(item, name) {
+                Some(Value::Uuid(id)) => id.to_string(),
+                Some(value) => value.as_str().unwrap_or_default().to_owned(),
+                None => String::new(),
+            };
+            out.push((
+                item,
+                StatusRepair {
+                    template: text("CurrentTemplate"),
+                    stats: text("Stats"),
+                    shared: 0,
+                    untagged: 0,
+                },
+            ));
+        }
+        if let Some((_, repair)) = out.last_mut() {
+            match fault {
+                Fault::Shared => repair.shared += 1,
+                Fault::Untagged => repair.untagged += 1,
             }
         }
     }
-    out.into_iter().map(|(_, shared)| shared).collect()
+    out.into_iter().map(|(_, repair)| repair).collect()
 }
 
-/// Takes the statuses off every item that shares a status handle with an item before it,
-/// as a copy does now. The first item to hold a handle keeps it: a copy comes after the item
-/// it was made from. A handle can't simply be replaced: the game's all have `0x20` as their
-/// first byte, and a save with copies given random ones hung as it loaded. Returns how many
-/// items lost their statuses.
-pub fn repair_shared_statuses(globals: &mut Lsf) -> Result<usize> {
-    let mut items: Vec<NodeId> = shared_handles(globals)
-        .into_iter()
-        .map(|(i, _)| i)
-        .collect();
+/// Repairs what earlier versions left: an item sharing a status handle with an item before
+/// it loses its statuses (a save repaired so loaded, and its items could be combined), and
+/// a handle without the game's tag is given it (likewise). Returns how many items changed.
+pub fn repair_statuses(globals: &mut Lsf) -> Result<usize> {
+    let faults = status_faults(globals);
+    let mut items: Vec<NodeId> = faults.iter().map(|&(item, ..)| item).collect();
     items.dedup();
-    let gone: Vec<NodeId> = items.iter().flat_map(|&i| statuses(globals, i)).collect();
+    let sharing: Vec<NodeId> = faults
+        .iter()
+        .filter(|f| f.2 == Fault::Shared)
+        .map(|&(item, ..)| item)
+        .collect();
+    for &(item, attr, fault) in &faults {
+        if fault == Fault::Untagged && !sharing.contains(&item) {
+            if let Value::Uuid(mut handle) = globals.value(attr)? {
+                handle.0[0] = STATUS_HANDLE_TAG;
+                globals.set_value(attr, &Value::Uuid(handle))?;
+            }
+        }
+    }
+    // Last, as taking nodes out numbers the rest again.
+    let gone: Vec<NodeId> = sharing.iter().flat_map(|&i| statuses(globals, i)).collect();
     if !gone.is_empty() {
         globals.remove_nodes(&gone)?;
     }
     Ok(items.len())
+}
+
+/// Gives each status on an item's node a new handle, as the game makes them. A copy's
+/// statuses are the donor's, handles and all, and two items must not share one.
+fn fresh_status_handles(globals: &mut Lsf, node: NodeId) -> Result<()> {
+    for status in statuses(globals, node) {
+        if globals.node_name(status) != "StatusMeta" {
+            continue;
+        }
+        if let Some(handle) = globals.attr(status, "Handle") {
+            globals.set_value(handle, &Value::Uuid(new_status_handle()))?;
+        }
+    }
+    Ok(())
 }
 
 /// Research: test changes that each check one part of the method on its own. None adds
@@ -1479,10 +1531,11 @@ fn copy_nodes(globals: &mut Lsf, item: Uuid, copy: Uuid) -> Result<()> {
     if let Some(uuid) = globals.attr(new_creator, "UUID") {
         globals.set_value(uuid, &Value::Uuid(new_uuid()))?;
     }
-    // The donor's statuses stay the donor's. Copied, a copy shares their handles, and taking
-    // either item out of the game (selling it, combining it) crashed it; given random new
-    // handles, the save hung as it loaded. A copy without them loads and works.
-    drop_statuses(globals, new_node)
+    // The copy keeps the donor's statuses (a Fey Coin's sparkle) under handles of its own.
+    // Sharing the donor's, taking either item out of the game (selling it, combining it)
+    // crashed it; with random handles lacking the game's tag, the save hung as it loaded.
+    // An item made into another loses them (see `make_into`).
+    fresh_status_handles(globals, new_node)
 }
 
 #[cfg(test)]
@@ -1580,65 +1633,71 @@ mod tests {
             .collect()
     }
 
-    /// Two copies of the rope as versions before 1.3.2 made them, with the rope's statuses
-    /// and their handles.
-    fn old_copies(globals: &mut Lsf, entities: &mut NewAge) -> [Uuid; 2] {
+    /// Two copies of the rope as versions before 1.3.1 made them, with the rope's statuses
+    /// and their handles, and one as 1.3.1 made it, with a random handle without the tag.
+    fn old_copies(globals: &mut Lsf, entities: &mut NewAge) -> [Uuid; 3] {
         let copies = [
             copy_item(globals, entities, uuid(ROPE)).unwrap(),
             copy_item(globals, entities, uuid(ROPE)).unwrap(),
+            copy_item(globals, entities, uuid(ROPE)).unwrap(),
         ];
-        for copy in copies {
+        for (i, copy) in copies.into_iter().enumerate() {
             let (_, node) = item_nodes(globals, copy).unwrap();
-            let empty = globals.child(node, "StatusManager").unwrap();
-            globals.remove_nodes(&[empty]).unwrap();
-            let (_, node) = item_nodes(globals, copy).unwrap();
-            let (_, rope) = item_nodes(globals, uuid(ROPE)).unwrap();
-            let manager = globals.child(rope, "StatusManager").unwrap();
-            globals.copy_node(manager, node).unwrap();
+            let meta = globals.child(node, "StatusManager").unwrap();
+            let meta = globals.child(meta, "StatusMeta").unwrap();
+            let handle = globals.attr(meta, "Handle").unwrap();
+            let old = match i {
+                2 => Uuid([0x7f; 16]),
+                _ => ROPE_STATUS,
+            };
+            globals.set_value(handle, &Value::Uuid(old)).unwrap();
         }
         copies
     }
 
     #[test]
-    fn repairs_statuses_that_copies_share() {
+    fn repairs_statuses_that_earlier_versions_left() {
         let mut globals = sample_globals();
         let mut entities = sample_entities();
-        assert!(shared_statuses(&globals).is_empty());
+        assert!(status_repairs(&globals).is_empty());
         let copies = old_copies(&mut globals, &mut entities);
         let (mut globals, _) = reread(&mut globals, &entities);
-        assert_eq!(statuses_of(&globals, copies[1]).len(), 1);
-        let shared = shared_statuses(&globals);
-        assert_eq!(
+        let repair = |shared, untagged| StatusRepair {
+            template: "00000000-0000-0000-0000-00000000cccc".to_owned(),
+            stats: "OBJ_Rope".to_owned(),
             shared,
-            vec![
-                SharedStatus {
-                    template: "00000000-0000-0000-0000-00000000cccc".to_owned(),
-                    stats: "OBJ_Rope".to_owned(),
-                    statuses: 1,
-                };
-                2
-            ]
+            untagged,
+        };
+        assert_eq!(
+            status_repairs(&globals),
+            [repair(1, 0), repair(1, 0), repair(0, 1)]
         );
-        assert_eq!(repair_shared_statuses(&mut globals).unwrap(), 2);
-        assert!(shared_statuses(&globals).is_empty());
-        // The rope keeps its own; the copies have none.
+        assert_eq!(repair_statuses(&mut globals).unwrap(), 3);
+        assert!(status_repairs(&globals).is_empty());
+        // The rope keeps its own; the copies sharing it have none; the untagged one is tagged.
         assert_eq!(
             statuses_of(&globals, uuid(ROPE)),
-            [("ROPE_VFX".to_owned(), Some(Uuid([0x5a; 16])))]
+            [("ROPE_VFX".to_owned(), Some(ROPE_STATUS))]
         );
         assert!(statuses_of(&globals, copies[0]).is_empty());
         assert!(statuses_of(&globals, copies[1]).is_empty());
-        assert_eq!(repair_shared_statuses(&mut globals).unwrap(), 0);
+        let mut tagged = [0x7f; 16];
+        tagged[0] = STATUS_HANDLE_TAG;
+        assert_eq!(
+            statuses_of(&globals, copies[2]),
+            [("ROPE_VFX".to_owned(), Some(Uuid(tagged)))]
+        );
+        assert_eq!(repair_statuses(&mut globals).unwrap(), 0);
         let (globals, _) = reread(&mut globals, &entities);
-        assert!(shared_statuses(&globals).is_empty());
+        assert!(status_repairs(&globals).is_empty());
     }
 
     #[test]
-    fn copies_have_none_of_the_donors_statuses() {
+    fn copies_keep_statuses_under_handles_of_their_own() {
         let mut globals = sample_globals();
         let mut entities = sample_entities();
         let donor = statuses_of(&globals, uuid(ROPE));
-        assert_eq!(donor, [("ROPE_VFX".to_owned(), Some(Uuid([0x5a; 16])))]);
+        assert_eq!(donor, [("ROPE_VFX".to_owned(), Some(ROPE_STATUS))]);
         let same = copy_item(&mut globals, &mut entities, uuid(ROPE)).unwrap();
         let other = copy_item_to(
             &mut globals,
@@ -1650,11 +1709,17 @@ mod tests {
         .unwrap();
         let (globals, _) = reread(&mut globals, &entities);
         assert_eq!(statuses_of(&globals, uuid(ROPE)), donor);
-        assert!(statuses_of(&globals, same).is_empty());
+        // The same item keeps the rope's status, under a new handle tagged as the game's are.
+        let kept = statuses_of(&globals, same);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].0, "ROPE_VFX");
+        let handle = kept[0].1.unwrap();
+        assert!(handle != ROPE_STATUS && handle.0[0] == STATUS_HANDLE_TAG);
+        // Another item made from it has none of the rope's, and an empty status list.
         assert!(statuses_of(&globals, other).is_empty());
-        // The status list itself is still there, empty, as on an item with no status.
         let (_, node) = item_nodes(&globals, other).unwrap();
         assert_eq!(globals.children_named(node, "StatusManager").count(), 1);
+        assert!(status_repairs(&globals).is_empty());
     }
 
     #[test]

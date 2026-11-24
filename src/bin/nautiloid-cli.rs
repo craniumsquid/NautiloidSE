@@ -40,8 +40,8 @@ A <save> is a .lsv file or the save folder that holds one.
       Add items as the app does, and export: <holder> is a character's name or \"chest\",
       each <item> the game's name for it (OBJ_Potion_Healing), *N for more than one.
   repair <save> <folder> <name>
-      Export with nothing changed but what every export repairs: items sharing hidden
-      status records with another, as copies made before version 1.3.1 do.
+      Export with nothing changed but what every export repairs: item status records that
+      earlier versions left broken (shared with another item, or untagged).
   donors <save> [--game FOLDER] [--tables] [--kind KIND]
       Research: every item in the save's item factory, counted by kind and by where it is
       (the party's, someone else's, nowhere) and whether it is equipped, stacked or a story
@@ -979,13 +979,11 @@ fn repair(args: &Args, out: &mut impl Write) -> Result<()> {
     let session = Session::open(Path::new(&args.positional[0]))?;
     let repairs = session.repairs();
     ensure!(!repairs.is_empty(), "nothing in this save needs repairing");
-    for shared in repairs {
+    for repair in repairs {
         writeln!(
             out,
-            "{}: {} status{} shared with an item before it",
-            shared.stats,
-            shared.statuses,
-            if shared.statuses == 1 { "" } else { "es" }
+            "{}: {} status handle(s) shared with an item before it, {} without the game's tag",
+            repair.stats, repair.shared, repair.untagged
         )?;
     }
     let written = session.export(Path::new(&args.positional[1]), &args.positional[2])?;

@@ -777,7 +777,7 @@ fn repairs_statuses_that_earlier_copies_share() {
     use nautiloid_save_editor::session::Session;
     let dir = temp_dir("repair");
     sample_saves(&dir);
-    // A rope copied as versions before 1.3.2 did, with the rope's status and its handle.
+    // A rope copied as versions before 1.3.1 did, with the rope's status and its handle.
     let folder = dir.join("Tav-1234__Shattered Sanctum - 8h 02m");
     let mut save = Save::open(&folder).unwrap();
     let mut globals = save.lsf(save::GLOBALS).unwrap();
@@ -785,24 +785,14 @@ fn repairs_statuses_that_earlier_copies_share() {
     items::copy_item(&mut globals, &mut entities, uuid(ROPE)).unwrap();
     entities.store(&mut globals).unwrap();
     let mut globals = Lsf::parse(&globals.write().unwrap()).unwrap();
-    let list = globals.find(&["Items", "ItemFactory", "Items"]).unwrap();
-    let copy = globals.children_named(list, "Item").last().unwrap();
-    let empty = globals.child(copy, "StatusManager").unwrap();
-    assert!(globals.children(empty).is_empty());
-    globals.remove_nodes(&[empty]).unwrap();
-    let list = globals.find(&["Items", "ItemFactory", "Items"]).unwrap();
-    let copy = globals.children_named(list, "Item").last().unwrap();
-    let rope = globals
-        .children_named(list, "Item")
-        .find(|&i| {
-            globals
-                .get(i, "Stats")
-                .and_then(|v| v.as_str().map(str::to_owned))
-                == Some("OBJ_Rope".to_owned())
-        })
-        .unwrap();
-    let manager = globals.child(rope, "StatusManager").unwrap();
-    globals.copy_node(manager, copy).unwrap();
+    // The copy's status takes the rope's handle back.
+    let handles: Vec<_> = (0..globals.node_count() as u32)
+        .filter(|&node| globals.node_name(node) == "StatusMeta")
+        .filter_map(|meta| globals.attr(meta, "Handle"))
+        .collect();
+    assert_eq!(handles.len(), 2, "the rope's, then the copy's");
+    let rope = globals.value(handles[0]).unwrap();
+    globals.set_value(handles[1], &rope).unwrap();
     save.package
         .replace(save::GLOBALS, &globals.write().unwrap())
         .unwrap();
@@ -815,7 +805,7 @@ fn repairs_statuses_that_earlier_copies_share() {
     assert!(session.changes().is_empty());
     assert!(ui.sees("REPAIRED ON EXPORT"));
     assert!(ui.sees("Rope"), "the copy is named");
-    assert!(ui.sees("One item shares hidden status records with another item"));
+    assert!(ui.sees("One item has hidden status records that earlier versions"));
     ui.snapshot("17-repair-on-export");
     // Nothing else changed, and the export carries the repair.
     ui.click("Export as a new save…");

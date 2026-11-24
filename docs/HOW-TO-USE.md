@@ -169,11 +169,12 @@ A few things to know:
   when you play: an item from a mod needs it, like any other.
 - If your saves folder is somewhere else, mods' items keep a rough name made from their
   internal name, and can only be copied: the **+** beside one someone carries adds more.
-- A new item doesn't copy its donor's glow or sparkle effect, so it may look plainer than
-  others like it. Copies made by versions before 1.3.2 shared those effects with the item
-  they were copied from, which can crash the game when one of them is sold or combined. When
-  a save has any, the Changes panel lists them under **Repaired on export**, and any export
-  fixes them.
+- An item made from a different one doesn't take that item's glow or sparkle effect, so it
+  may look plainer than others like it. Copies of the same item keep theirs.
+- Items added by versions before 1.3.2 can have hidden status records the game trips over:
+  it may crash when one is sold or combined, or hang or crash as the save loads. When a save
+  has any, the Changes panel lists them under **Repaired on export**, and any export fixes
+  them.
 
 ## 6. Change approval
 

@@ -129,8 +129,8 @@ fn repairs(ui: &mut Ui, session: &Session) {
         list.push_str(&format!(" and {} more", names.len() - shown));
     }
     let count = match repairs.len() {
-        1 => "One item shares".to_owned(),
-        n => format!("{n} items share"),
+        1 => "One item has".to_owned(),
+        n => format!("{n} items have"),
     };
     Frame::none()
         .fill(theme::PANEL)
@@ -144,10 +144,10 @@ fn repairs(ui: &mut Ui, session: &Session) {
             ui.add(
                 egui::Label::new(
                     egui::RichText::new(format!(
-                        "{count} hidden status records with another item, as copies made by \
-                         versions of this editor before 1.3.2 do. Selling, combining or \
-                         destroying one could crash the game. The export takes them off the \
-                         copies, which may lose a glow or sparkle; nothing else changes."
+                        "{count} hidden status records that earlier versions of this editor \
+                         left broken. Loading the save, or selling or combining one of them, \
+                         could crash the game. The export repairs them; an item may lose a \
+                         glow or sparkle, and nothing else changes."
                     ))
                     .font(theme::body(12.5))
                     .color(theme::MUTED),

@@ -246,8 +246,8 @@ belongs to them; in the camp chest it belongs to nobody, as the chest's items do
    sight row gets a new random identifier, and the ownership rows (`OwneeCurrent`,
    `OwneeHistory`) name the new owner.
 6. The donor's creator and item nodes are copied with the new `Entity` and a new creator
-   `UUID`, and the item's wares mark (bit 33 of its `Flags`) is cleared. The copy's
-   `StatusManager` is left empty, as an item with no status has it (see Statuses).
+   `UUID`, and the item's wares mark (bit 33 of its `Flags`) is cleared. Each of its
+   statuses gets a new handle (see Statuses).
 
 ### Making the copy into another item (`items::make_into`)
 
@@ -264,20 +264,26 @@ the save names a handle. In 1,500 handles from the game's own saves, the first b
 last pair of the first group as text, `…20-`) is always `0x20` and the rest varies; no two
 items share one.
 
-A copy has none of its donor's statuses. Tried in the game:
+A copy keeps its donor's statuses, each under a new random handle with `0x20` as its first
+byte; an item made into another has none of the donor's. Tried in the game:
 
 - Copies keeping the donor's statuses, handles and all (versions before 1.3.1): they load
   and work, until one of them leaves the game. Combining copied Fey Coins crashed it. An
   Astral Coin and a Celestial Coin made from a Fey Coin crashed it as the save loaded: the
   mod's coin statuses share a `StackId`, so the status the new template brings replaces the
   copied one, whose handle was still the Fey Coin's.
-- Copies keeping them under random new handles (1.3.1): the save hung at 75% as it loaded.
-- Copies with none (1.3.2): the Astral and Celestial Coins load and work.
+- Copies keeping them under random handles without the tag (1.3.1): the save hung at 75% as
+  it loaded.
+- Copies with none (1.3.2): load, and five combine into the next coin.
+- The 1.3.1 save with its copies' handles given the tag: loads, and five combine.
+- Items made into another with none of the donor's: the Astral and Celestial Coins load and
+  work.
 
-Every export also repairs what earlier versions left (`items::repair_shared_statuses`): an
-item holding a handle that an item before it in the list holds too loses its statuses. The
-first holder keeps them, as a copy comes after the item it was made from. The Changes panel
-lists the items when a save has any.
+Every export also repairs what earlier versions left (`items::repair_statuses`). An item
+holding a handle that an item before it in the list holds too loses its statuses; the first
+holder keeps them, as a copy comes after the item it was made from (tried: loads, and the
+copies combine). A handle without the tag is given it. The Changes panel lists the items when
+a save has any, and the export checks that none is left.
 
 ### Stacks
 

@@ -136,8 +136,8 @@ pub struct Session {
     additions: Vec<Addition>,
     /// The story state, read the first time it is asked for.
     story: std::cell::OnceCell<Result<crate::story::State, String>>,
-    /// Items whose statuses share handles with another item's, which every export repairs.
-    shared_statuses: Vec<items::SharedStatus>,
+    /// Items whose statuses earlier versions left broken, which every export repairs.
+    status_repairs: Vec<items::StatusRepair>,
 }
 
 /// Finds each character's entry in the save's own summary, which is the only place the
@@ -280,7 +280,7 @@ impl Session {
         });
         let mods = mods::read(&save.lsf(save::META)?);
         let active = mods::active_for(&summary.folder);
-        let shared_statuses = items::shared_statuses(&globals);
+        let status_repairs = items::status_repairs(&globals);
         Ok(Session {
             summary,
             save,
@@ -299,7 +299,7 @@ impl Session {
             sources: Vec::new(),
             additions: Vec::new(),
             story: std::cell::OnceCell::new(),
-            shared_statuses,
+            status_repairs,
         })
     }
 
@@ -623,21 +623,19 @@ impl Session {
             .unwrap_or_else(|| tidy(&item.stats))
     }
 
-    /// What every export repairs, whatever else it changes: items whose statuses share a
-    /// handle with another item's, as copies made before version 1.3.2 do. Selling,
-    /// combining or otherwise taking one of them out of the game can crash it. The export
-    /// takes the statuses off the later of them, the copies.
-    pub fn repairs(&self) -> &[items::SharedStatus] {
-        &self.shared_statuses
+    /// What every export repairs, whatever else it changes: items whose statuses earlier
+    /// versions left broken (see [`items::StatusRepair`]).
+    pub fn repairs(&self) -> &[items::StatusRepair] {
+        &self.status_repairs
     }
 
     /// The name to show for an item a repair is for.
-    pub fn repair_name(&self, shared: &items::SharedStatus) -> String {
+    pub fn repair_name(&self, repair: &items::StatusRepair) -> String {
         self.catalog
             .as_ref()
-            .and_then(|c| c.display_name(&shared.template, &shared.stats))
+            .and_then(|c| c.display_name(&repair.template, &repair.stats))
             .map(str::to_owned)
-            .unwrap_or_else(|| tidy(&shared.stats))
+            .unwrap_or_else(|| tidy(&repair.stats))
     }
 
     /// The mods the save lists, in its order.
@@ -1047,8 +1045,8 @@ impl Session {
     pub fn export(&self, parent: &Path, name: &str) -> Result<PathBuf> {
         let mut entities = self.edited_entities()?;
         let mut globals = self.globals.clone();
-        // Statuses that items share, left by earlier versions, come off the copies.
-        items::repair_shared_statuses(&mut globals)?;
+        // Item statuses that earlier versions left broken.
+        items::repair_statuses(&mut globals)?;
         // New items: each a copy of its donor in the holder's own inventory, made into the
         // item asked for unless it is the same one; one stack of them for an item that
         // stacks.
@@ -1128,8 +1126,8 @@ impl Session {
                 "the exported save does not hold the changes"
             );
             ensure!(
-                items::shared_statuses(&globals).is_empty(),
-                "items in the exported save still share statuses"
+                items::status_repairs(&globals).is_empty(),
+                "items in the exported save still have broken statuses"
             );
             if made_manual {
                 ensure!(

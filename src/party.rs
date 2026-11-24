@@ -893,6 +893,11 @@ pub mod build {
     pub const TRADER_PACK: u32 = 9;
     pub const TRADER_GOLD: u32 = 10;
     pub const ROPE: u32 = 11;
+    /// The handle of the rope's status, tagged as the game tags them.
+    pub const ROPE_STATUS: Uuid = Uuid([
+        0x20, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a, 0x5a,
+        0x5a,
+    ]);
     pub const CAMPER: u32 = 12;
     pub const CAMPER_GOLD: u32 = 13;
     pub const CAMPER_PACK: u32 = 14;
@@ -993,7 +998,7 @@ pub mod build {
                         .child(
                             Node::new("StatusMeta")
                                 .attr("ID", DataType::FixedString, id("ROPE_VFX"))
-                                .attr("Handle", DataType::Uuid, Value::Uuid(Uuid([0x5a; 16]))),
+                                .attr("Handle", DataType::Uuid, Value::Uuid(ROPE_STATUS)),
                         )
                         .child(
                             Node::new("STATUS")
