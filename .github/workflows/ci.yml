@@ -111,9 +111,7 @@ jobs:
       github.ref == 'refs/heads/main' ||
       startsWith(github.ref, 'refs/tags/v') ||
       contains(github.event.head_commit.message, '[build]')
-    # A named image: on 24 November 2026 every job asking for `macos-latest` went unanswered
-    # for its quarter of an hour, four runs in a row, while GitHub said all was well.
-    runs-on: macos-15
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.97.0
